@@ -978,18 +978,39 @@ function TabEmpresas({ empresas, currentUser, geoCoords, onRefresh, setEmpresaAt
 }
 
 // =========================================================================
-// ABA 2: ANÁLISE DE RISCOS COM FOTOS
+// ABA 2: ANÁLISE DE RISCOS COM FOTOS (MÚLTIPLAS CATEGORIAS POR FORMULÁRIO)
 // =========================================================================
 function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onRefresh, showToast }) {
   const [local, setLocal] = useState("");
   const [setor, setSetor] = useState("");
-  const [tipoRisco, setTipoRisco] = useState("Físico");
+  const [tiposSelecionados, setTiposSelecionados] = useState(["Físico"]);
   const [nivelRisco, setNivelRisco] = useState("Médio");
   const [riscos, setRiscos] = useState("");
   const [medidas, setMedidas] = useState("");
   const [foto, setFoto] = useState(null);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef(null);
+
+  const CATEGORIAS_RISCO = [
+    { id: "Físico", label: "Físico (Ruído/Calor/Vibração)", icon: "hearing", color: "#2563eb", bg: "#eff6ff", border: "#bfdbfe" },
+    { id: "Químico", label: "Químico (Poeiras/Vapores/Fumos)", icon: "science", color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
+    { id: "Biológico", label: "Biológico (Bactérias/Vírus/Fungos)", icon: "coronavirus", color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0" },
+    { id: "Ergonômico", label: "Ergonômico (Postura/Peso/Esforço)", icon: "accessibility_new", color: "#d97706", bg: "#fffbeb", border: "#fde68a" },
+    { id: "Acidente / Altura", label: "Acidente / Altura / Choque", icon: "warning", color: "#9333ea", bg: "#faf5ff", border: "#e9d5ff" },
+    { id: "Psicossocial / Outros", label: "Outros Riscos Ocupacionais", icon: "security", color: "#0891b2", bg: "#ecfeff", border: "#a5f3fc" }
+  ];
+
+  const toggleTipoRisco = (tipoId) => {
+    if (tiposSelecionados.includes(tipoId)) {
+      if (tiposSelecionados.length > 1) {
+        setTiposSelecionados(tiposSelecionados.filter(t => t !== tipoId));
+      } else {
+        showToast("Selecione pelo menos uma categoria de risco.", "warning");
+      }
+    } else {
+      setTiposSelecionados([...tiposSelecionados, tipoId]);
+    }
+  };
 
   if (!empresaAtiva) {
     return (
@@ -1017,6 +1038,10 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
       return showToast("Preencha o local inspecionado e a descrição dos riscos.", "error");
     }
 
+    if (tiposSelecionados.length === 0) {
+      return showToast("Selecione ao menos uma categoria de risco.", "error");
+    }
+
     setLoading(true);
     try {
       const res = await fetch('/api/risks', {
@@ -1026,7 +1051,7 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
           empresaId: empresaAtiva.id,
           local: local.trim(),
           setor: setor.trim(),
-          tipoRisco,
+          tipoRisco: tiposSelecionados.join(', '),
           nivelRisco,
           riscos: riscos.trim(),
           medidasPreventivas: medidas.trim(),
@@ -1043,8 +1068,9 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      showToast("Relatório de inspeção de risco registrado no SQLite com sucesso!", "success");
+      showToast("Relatório de inspeção de risco registrado com sucesso!", "success");
       setLocal(""); setSetor(""); setRiscos(""); setMedidas(""); setFoto(null);
+      setTiposSelecionados(["Físico"]);
       onRefresh();
     } catch (err) {
       showToast(err.message, "error");
@@ -1076,7 +1102,7 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
         <div className="card-header">
           <div className="card-title-group">
             <Icon name="security" style={{ color: '#2563eb' }} />
-            <span>Nova Inspeção de Campo</span>
+            <span>Nova Inspeção de Campo (Múltiplos Riscos)</span>
           </div>
           <span className="badge badge-free">{empresaAtiva.name}</span>
         </div>
@@ -1091,27 +1117,56 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
             required
           />
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <div>
-              <label className="label">Categoria do Risco</label>
-              <select className="select" value={tipoRisco} onChange={(e) => setTipoRisco(e.target.value)}>
-                <option value="Físico">Físico (Ruído/Calor/Vibração)</option>
-                <option value="Químico">Químico (Poeira/Vapores)</option>
-                <option value="Biológico">Biológico (Bactérias/Vírus)</option>
-                <option value="Ergonômico">Ergonômico (Postura/Peso)</option>
-                <option value="Acidente / Altura">Acidente / Altura / Elétrico</option>
-              </select>
+          {/* Seleção Múltipla de Riscos */}
+          <div style={{ marginBottom: '16px' }}>
+            <label className="label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Categorias de Riscos Identificados * (Selecione 1 ou mais)</span>
+              <span style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600 }}>
+                {tiposSelecionados.length} selecionada(s)
+              </span>
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+              {CATEGORIAS_RISCO.map((cat) => {
+                const isSelected = tiposSelecionados.includes(cat.id);
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => toggleTipoRisco(cat.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '8px 10px',
+                      borderRadius: '8px',
+                      border: isSelected ? `2px solid ${cat.color}` : '1px solid #cbd5e1',
+                      background: isSelected ? cat.bg : '#ffffff',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <Icon name={cat.icon} style={{ fontSize: '18px', color: isSelected ? cat.color : '#64748b' }} />
+                    <span style={{ fontSize: '12px', fontWeight: isSelected ? 700 : 500, color: isSelected ? '#0f172a' : '#475569', flex: 1 }}>
+                      {cat.label}
+                    </span>
+                    {isSelected && (
+                      <Icon name="check_circle" style={{ fontSize: '16px', color: cat.color }} />
+                    )}
+                  </button>
+                );
+              })}
             </div>
+          </div>
 
-            <div>
-              <label className="label">Nível de Severidade</label>
-              <select className="select" value={nivelRisco} onChange={(e) => setNivelRisco(e.target.value)}>
-                <option value="Baixo">Baixo (Tolerável)</option>
-                <option value="Médio">Médio (Atenção)</option>
-                <option value="Alto">Alto (Grave)</option>
-                <option value="Crítico">Crítico (Iminente)</option>
-              </select>
-            </div>
+          <div style={{ marginBottom: '16px' }}>
+            <label className="label">Nível Geral de Severidade / Criticidade</label>
+            <select className="select" value={nivelRisco} onChange={(e) => setNivelRisco(e.target.value)}>
+              <option value="Baixo">Baixo (Tolerável)</option>
+              <option value="Médio">Médio (Atenção)</option>
+              <option value="Alto">Alto (Grave)</option>
+              <option value="Crítico">Crítico (Iminente)</option>
+            </select>
           </div>
 
           <label className="label">Evidência Fotográfica de Campo (Câmera / Upload)</label>
@@ -1205,11 +1260,15 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
                     <div>
                       <h4 style={{ color: '#0f172a', fontSize: '16px', fontWeight: 700 }}>{a.local}</h4>
-                      <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
                         <span className={`badge ${a.nivel_risco === 'Crítico' || a.nivel_risco === 'Alto' ? 'badge-danger' : a.nivel_risco === 'Médio' ? 'badge-warning' : 'badge-success'}`}>
                           Nível {a.nivel_risco}
                         </span>
-                        <span className="badge badge-free">{a.tipo_risco}</span>
+                        {(a.tipo_risco || 'Físico').split(',').map((t, idx) => (
+                          <span key={idx} className="badge badge-free" style={{ fontSize: '11px' }}>
+                            {t.trim()}
+                          </span>
+                        ))}
                       </div>
                     </div>
 
@@ -1513,15 +1572,36 @@ function TabAlmoxarifado({ empresaAtiva, materiais, currentUser, geoCoords, onRe
 }
 
 // =========================================================================
-// ABA 4: SOLICITAÇÕES COM BAIXA AUTOMÁTICA DE EPI NO ALMOXARIFADO
+// ABA 4: SOLICITAÇÕES COM MÚLTIPLOS ITENS E BAIXA AUTOMÁTICA DE EPI NO ALMOXARIFADO
 // =========================================================================
 function TabSolicitacoes({ empresaAtiva, materiaisAtivos, solicitacoes, isPremium, currentUser, geoCoords, onRefresh, onOpenTermo, showToast }) {
   const [colaborador, setColaborador] = useState("");
   const [funcao, setFuncao] = useState("Colaborador Operacional");
-  const [matId, setMatId] = useState("");
-  const [quantidade, setQuantidade] = useState("1");
-  const [motivo, setMotivo] = useState("Substituição Periódica");
+  const [itensPedido, setItensPedido] = useState([
+    { id: 1, materialId: "", quantidade: "1", motivo: "Substituição Periódica" }
+  ]);
   const [loading, setLoading] = useState(false);
+
+  const adicionarItem = () => {
+    setItensPedido([
+      ...itensPedido,
+      { id: Date.now(), materialId: "", quantidade: "1", motivo: "Substituição Periódica" }
+    ]);
+  };
+
+  const removerItem = (index) => {
+    if (itensPedido.length > 1) {
+      setItensPedido(itensPedido.filter((_, i) => i !== index));
+    } else {
+      showToast("O pedido deve conter pelo menos um item de EPI.", "warning");
+    }
+  };
+
+  const atualizarItem = (index, campo, valor) => {
+    const novos = [...itensPedido];
+    novos[index][campo] = valor;
+    setItensPedido(novos);
+  };
 
   if (!empresaAtiva) {
     return (
@@ -1535,8 +1615,15 @@ function TabSolicitacoes({ empresaAtiva, materiaisAtivos, solicitacoes, isPremiu
 
   const handleGerarPedido = async (e) => {
     if (e) e.preventDefault();
-    if (!colaborador.trim() || !matId) {
-      return showToast("Preencha o nome do colaborador e selecione o EPI no estoque.", "error");
+    if (!colaborador.trim()) {
+      return showToast("Preencha o nome do colaborador.", "error");
+    }
+
+    // Validar se todos os itens possuem material selecionado
+    for (let i = 0; i < itensPedido.length; i++) {
+      if (!itensPedido[i].materialId) {
+        return showToast(`Selecione o EPI para o item ${i + 1} do pedido.`, "error");
+      }
     }
 
     setLoading(true);
@@ -1548,9 +1635,11 @@ function TabSolicitacoes({ empresaAtiva, materiaisAtivos, solicitacoes, isPremiu
           empresaId: empresaAtiva.id,
           colaborador: colaborador.trim(),
           funcaoColaborador: funcao.trim(),
-          materialId: matId,
-          quantidade: Number(quantidade) || 1,
-          motivo,
+          items: itensPedido.map(it => ({
+            materialId: it.materialId,
+            quantidade: Number(it.quantidade) || 1,
+            motivo: it.motivo
+          })),
           userId: currentUser?.id,
           username: currentUser?.name,
           latitude: geoCoords.lat,
@@ -1562,8 +1651,9 @@ function TabSolicitacoes({ empresaAtiva, materiaisAtivos, solicitacoes, isPremiu
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      showToast(`Solicitação de EPI para '${colaborador}' gerada com sucesso!`, "success");
-      setColaborador(""); setMatId(""); setQuantidade("1");
+      showToast(data.message || `Solicitação de ${itensPedido.length} item(ns) de EPI para '${colaborador}' gerada com sucesso!`, "success");
+      setColaborador("");
+      setItensPedido([{ id: 1, materialId: "", quantidade: "1", motivo: "Substituição Periódica" }]);
       onRefresh();
     } catch (err) {
       showToast(err.message, "error");
@@ -1624,13 +1714,14 @@ function TabSolicitacoes({ empresaAtiva, materiaisAtivos, solicitacoes, isPremiu
 
   return (
     <div className="grid-layout">
-      {/* Formulário de Pedido de EPI */}
+      {/* Formulário com Múltiplos Itens de EPI */}
       <div className="card">
         <div className="card-header">
           <div className="card-title-group">
             <Icon name="front_hand" style={{ color: '#2563eb' }} />
-            <span>Gerar Nova Solicitação de EPI</span>
+            <span>Gerar Solicitação de EPI (Múltiplos Itens)</span>
           </div>
+          <span className="badge badge-free">{empresaAtiva.name}</span>
         </div>
 
         <form onSubmit={handleGerarPedido}>
@@ -1651,42 +1742,99 @@ function TabSolicitacoes({ empresaAtiva, materiaisAtivos, solicitacoes, isPremiu
             placeholder="Ex: Eletricista de Manutenção"
           />
 
-          <label className="label">EPI Solicitado (Estoque Atual no Almoxarifado) *</label>
-          <select className="select" value={matId} onChange={(e) => setMatId(e.target.value)} required>
-            <option value="">Selecione no almoxarifado...</option>
-            {materiaisAtivos.map((m) => (
-              <option key={m.id} value={m.id} disabled={m.quantidade_disponivel <= 0}>
-                {m.identificacao} ({m.ca_number || 'S/ CA'}) — Saldo: {m.quantidade_disponivel} {m.unidade} {m.quantidade_disponivel <= 0 ? '(ESGOTADO)' : ''}
-              </option>
-            ))}
-          </select>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
-            <div>
-              <label className="label">Quantidade *</label>
-              <input
-                className="input"
-                type="number"
-                min="1"
-                value={quantidade}
-                onChange={(e) => setQuantidade(e.target.value)}
-                required
-              />
+          {/* Lista de Itens de EPI */}
+          <div style={{ marginTop: '16px', borderTop: '1px solid #e2e8f0', paddingTop: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <strong style={{ fontSize: '13px', color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                📦 Itens de EPI Solicitados ({itensPedido.length})
+              </strong>
+              <button
+                type="button"
+                className="btn btn-outline"
+                style={{ width: 'auto', padding: '4px 10px', fontSize: '12px', borderColor: '#2563eb', color: '#2563eb' }}
+                onClick={adicionarItem}
+              >
+                <Icon name="add" style={{ fontSize: '16px' }} /> + Adicionar Outro EPI
+              </button>
             </div>
 
-            <div>
-              <label className="label">Motivo da Entrega</label>
-              <select className="select" value={motivo} onChange={(e) => setMotivo(e.target.value)}>
-                <option value="Admissão de Colaborador">Admissão de Colaborador</option>
-                <option value="Substituição por Desgaste">Substituição por Desgaste</option>
-                <option value="Perda / Extravio">Perda / Extravio</option>
-                <option value="Início de Atividade Especial / Altura">Início de Atividade Especial</option>
-              </select>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {itensPedido.map((item, index) => (
+                <div
+                  key={item.id || index}
+                  style={{
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '10px',
+                    padding: '12px',
+                    position: 'relative'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: '#2563eb' }}>
+                      Item #{index + 1}
+                    </span>
+                    {itensPedido.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removerItem(index)}
+                        style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', padding: '2px 6px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '2px' }}
+                        title="Remover este item"
+                      >
+                        <Icon name="delete" style={{ fontSize: '16px' }} /> Remover
+                      </button>
+                    )}
+                  </div>
+
+                  <label className="label" style={{ fontSize: '12px' }}>EPI no Almoxarifado *</label>
+                  <select
+                    className="select"
+                    value={item.materialId}
+                    onChange={(e) => atualizarItem(index, 'materialId', e.target.value)}
+                    required
+                  >
+                    <option value="">Selecione no almoxarifado...</option>
+                    {materiaisAtivos.map((m) => (
+                      <option key={m.id} value={m.id} disabled={m.quantidade_disponivel <= 0}>
+                        {m.identificacao} ({m.ca_number || 'S/ CA'}) — Saldo: {m.quantidade_disponivel} {m.unidade} {m.quantidade_disponivel <= 0 ? '(ESGOTADO)' : ''}
+                      </option>
+                    ))}
+                  </select>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '8px', marginTop: '8px' }}>
+                    <div>
+                      <label className="label" style={{ fontSize: '12px' }}>Qtd *</label>
+                      <input
+                        className="input"
+                        type="number"
+                        min="1"
+                        value={item.quantidade}
+                        onChange={(e) => atualizarItem(index, 'quantidade', e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="label" style={{ fontSize: '12px' }}>Motivo</label>
+                      <select
+                        className="select"
+                        value={item.motivo}
+                        onChange={(e) => atualizarItem(index, 'motivo', e.target.value)}
+                      >
+                        <option value="Admissão de Colaborador">Admissão</option>
+                        <option value="Substituição Periódica">Substituição Periódica</option>
+                        <option value="Desgaste Natural">Desgaste Natural</option>
+                        <option value="Perda / Extravio">Perda / Extravio</option>
+                        <option value="Início de Atividade Especial / Altura">Atividade Especial</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
-          <button type="submit" className="btn btn-primary" disabled={loading} style={{ marginTop: '8px' }}>
-            <Icon name="assignment" /> Gerar Pedido de EPI
+          <button type="submit" className="btn btn-primary" disabled={loading} style={{ marginTop: '16px' }}>
+            <Icon name="assignment" /> Gerar Pedido de ({itensPedido.length}) EPI(s)
           </button>
         </form>
       </div>

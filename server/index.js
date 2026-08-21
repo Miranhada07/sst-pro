@@ -593,53 +593,72 @@ app.get('/api/requests', async (req, res) => {
   }
 });
 
-// Criar nova solicitação de EPI
+// Criar solicitação de EPI (Aceita único item ou múltiplos itens em lote)
 app.post('/api/requests', async (req, res) => {
   try {
-    const { empresaId, colaborador, funcaoColaborador, cpfColaborador, materialId, quantidade, motivo, userId, username, latitude, longitude, locationText } = req.body;
+    const { empresaId, colaborador, funcaoColaborador, cpfColaborador, materialId, quantidade, motivo, items, userId, username, latitude, longitude, locationText } = req.body;
 
-    if (!empresaId || !colaborador || !materialId) {
-      return res.status(400).json({ error: 'Empresa, Colaborador e Material são obrigatórios.' });
+    if (!empresaId || !colaborador || (!materialId && (!items || items.length === 0))) {
+      return res.status(400).json({ error: 'Empresa, colaborador e pelo menos um item de EPI são obrigatórios.' });
     }
 
-    const material = await dbGet('SELECT * FROM inventory_materials WHERE id = ?', [materialId]);
-    if (!material) {
-      return res.status(404).json({ error: 'Material não encontrado no almoxarifado.' });
+    const itemsToProcess = (items && Array.isArray(items) && items.length > 0)
+      ? items
+      : [{ materialId, quantidade: Number(quantidade) || 1, motivo: motivo || 'Substituição Periódica' }];
+
+    const createdRequests = [];
+
+    for (const item of itemsToProcess) {
+      if (!item.materialId) continue;
+      const material = await dbGet('SELECT * FROM inventory_materials WHERE id = ?', [item.materialId]);
+      if (!material) continue;
+
+      const reqId = uid('req');
+      const qtdPedida = Number(item.quantidade) || 1;
+      const itemMotivo = item.motivo || motivo || 'Substituição Periódica';
+
+      await dbRun(`
+        INSERT INTO epi_requests (id, empresa_id, colaborador, funcao_colaborador, cpf_colaborador, material_id, material_nome, ca_number, quantidade, motivo, status, data_solicitacao)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'aberta', datetime('now', 'localtime'))
+      `, [
+        reqId,
+        empresaId,
+        colaborador.trim(),
+        funcaoColaborador || 'Colaborador Operacional',
+        cpfColaborador || '',
+        material.id,
+        material.identificacao,
+        material.ca_number,
+        qtdPedida,
+        itemMotivo
+      ]);
+
+      const newRequest = await dbGet('SELECT * FROM epi_requests WHERE id = ?', [reqId]);
+      createdRequests.push(newRequest);
     }
 
-    const reqId = uid('req');
-    const qtdPedida = Number(quantidade) || 1;
-
-    await dbRun(`
-      INSERT INTO epi_requests (id, empresa_id, colaborador, funcao_colaborador, cpf_colaborador, material_id, material_nome, ca_number, quantidade, motivo, status, data_solicitacao)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'aberta', datetime('now', 'localtime'))
-    `, [
-      reqId,
-      empresaId,
-      colaborador.trim(),
-      funcaoColaborador || 'Colaborador Operacional',
-      cpfColaborador || '',
-      material.id,
-      material.identificacao,
-      material.ca_number,
-      qtdPedida,
-      motivo || 'Substituição Periódica'
-    ]);
+    if (createdRequests.length === 0) {
+      return res.status(400).json({ error: 'Nenhum item válido de EPI foi selecionado no almoxarifado.' });
+    }
 
     await logAudit({
       userId,
       username,
       action: 'EPI_REQUESTED',
-      description: `Pedido de EPI gerado para '${colaborador.trim()}': ${qtdPedida}x '${material.identificacao}' (${material.ca_number}).`,
-      details: { reqId, colaborador, material: material.identificacao, quantidade: qtdPedida },
+      description: `Pedido de EPI (${createdRequests.length} item(ns)) gerado para '${colaborador.trim()}'.`,
+      details: { colaborador, totalItens: createdRequests.length },
       ip: getClientIp(req),
       lat: latitude,
       lng: longitude,
       locationText
     });
 
-    const newRequest = await dbGet('SELECT * FROM epi_requests WHERE id = ?', [reqId]);
-    res.status(201).json({ request: newRequest });
+    res.status(201).json({
+      success: true,
+      request: createdRequests[0],
+      requests: createdRequests,
+      message: `${createdRequests.length} item(ns) de EPI registrado(s) com sucesso para '${colaborador}'.`
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
