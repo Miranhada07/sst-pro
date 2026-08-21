@@ -50,11 +50,48 @@ export const dbAll = (sql, params = []) => {
   });
 };
 
+// Backup de segurança automático do banco SQLite
+export async function backupDatabase() {
+  try {
+    const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+    if (!fs.existsSync(BACKUP_DIR)) {
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    }
+
+    if (!fs.existsSync(DB_PATH)) return;
+
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const backupFile = path.join(BACKUP_DIR, `sst_pro_backup_${timestamp}.sqlite`);
+
+    fs.copyFileSync(DB_PATH, backupFile);
+    console.log(`[Database/Backup] ✅ Backup de segurança criado com sucesso: ${path.basename(backupFile)}`);
+
+    // Manter os últimos 20 backups e rotacionar os mais antigos
+    const files = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith('sst_pro_backup_') && f.endsWith('.sqlite')).sort();
+    if (files.length > 20) {
+      const toDelete = files.slice(0, files.length - 20);
+      for (const f of toDelete) {
+        try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch (e) { }
+      }
+    }
+  } catch (err) {
+    console.error('[Database/Backup] Erro ao criar backup automático:', err.message);
+  }
+}
+
 // Inicialização e Criação das Tabelas
 export async function initDatabase() {
   // Habilitar foreign keys e WAL mode para alta performance e concorrência local
   await dbRun('PRAGMA foreign_keys = ON');
   await dbRun('PRAGMA journal_mode = WAL');
+
+  // Criar backup automático na inicialização
+  await backupDatabase();
+
+  // Agendar backup periódico a cada 1 hora de funcionamento
+  setInterval(backupDatabase, 1000 * 60 * 60);
 
   // 1. Tabela de Usuários / Técnicos Responsáveis
   await dbRun(`

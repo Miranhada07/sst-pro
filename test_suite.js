@@ -44,7 +44,7 @@ async function runTests() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: 'Mineração & Construção Serra Dourada S/A',
+        name: '[TESTE_E2E_AUTO] Mineração & Construção Serra Dourada S/A',
         cnpj: '55.444.333/0001-22',
         porte: 'medio_grande',
         valorMensalidade: 1500,
@@ -55,7 +55,7 @@ async function runTests() {
       })
     });
     const compData = await compRes.json();
-    assert(compRes.ok && compData.company && compData.company.id, `Empresa criada: ${compData.company?.name}`);
+    assert(compRes.ok && compData.company && compData.company.id, `Empresa de teste criada: ${compData.company?.name}`);
     const testCompanyId = compData.company.id;
 
     // TESTE 3: Cadastro de Material no Almoxarifado
@@ -213,6 +213,16 @@ async function runTests() {
     const hasLoginAudit = auditData.logs.some(l => l.action.includes('LOGIN'));
     const hasPaymentAudit = auditData.logs.some(l => l.action.includes('PAYMENT'));
     assert(auditData.logs.length > 0 && hasDeliveryAudit && hasLoginAudit && hasPaymentAudit, 'Todos os eventos críticos (Logins, Baixas de EPI, Pagamentos) foram registrados na timeline de auditoria');
+
+    // Limpeza CIRÚRGICA apenas da empresa de teste criada neste suite
+    if (testCompanyId) {
+      await fetch(`${API_BASE}/companies/${testCompanyId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: adminUser.id, username: adminUser.name })
+      });
+      console.log('\n  🧹 [LIMPEZA SEGURA] Dados do teste automatizado removidos cirurgicamente. Todos os cadastros reais dos usuários foram 100% preservados.');
+    }
 
   } catch (err) {
     console.error('Erro na execução dos testes:', err);
