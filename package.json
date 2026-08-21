@@ -1,0 +1,17 @@
+{
+  "name": "sst-pro-desktop",
+  "version": "1.0.0",
+  "description": "App SST PRO - Gestão de Segurança e Saúde no Trabalho com Banco Local SQLite e Baixa Automática",
+  "main": "server/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4",
+    "sqlite3": "^5.1.7"
+  }
+}
