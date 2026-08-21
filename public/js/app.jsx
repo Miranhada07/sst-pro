@@ -535,6 +535,7 @@ function App() {
       {termoModalData && (
         <TermoEntregaModal
           request={termoModalData}
+          empresaAtiva={empresaAtiva}
           onClose={() => setTermoModalData(null)}
         />
       )}
@@ -1573,7 +1574,7 @@ function TabSolicitacoes({ empresaAtiva, materiaisAtivos, solicitacoes, isPremiu
 
   // FUNÇÃO CRUCIAL: BAIXA AUTOMÁTICA NO ESTOQUE AO APROVAR
   const handleAprovarEBaixarEstoque = async (req) => {
-    if (!confirm(`Confirmar entrega de ${req.quantidade}x '${req.material_nome}' para o colaborador '${req.colaborador}'?\n\nIsso dará BAIXA AUTOMÁTICA imediata no estoque do almoxarifado sob responsabilidade de ${currentUser.name}.`)) {
+    if (!confirm(`Confirmar entrega de ${req.quantidade}x '${req.material_nome}' para o colaborador '${req.colaborador}'?\n\nIsso dará BAIXA AUTOMÁTICA imediata no estoque do almoxarifado sob responsabilidade de ${currentUser?.name || 'Técnico Responsável'}.`)) {
       return;
     }
 
@@ -1582,29 +1583,40 @@ function TabSolicitacoes({ empresaAtiva, materiaisAtivos, solicitacoes, isPremiu
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          technicianId: currentUser.id,
-          technicianName: currentUser.name,
-          technicianRegistration: currentUser.registration_number,
+          technicianId: currentUser?.id,
+          technicianName: currentUser?.name,
+          technicianRegistration: currentUser?.registration_number,
           observacoes: `Entrega técnica realizada e conferida. EPI com CA ${req.ca_number || 'regular'} entregue em perfeitas condições de uso conforme NR-06.`,
-          latitude: geoCoords.lat,
-          longitude: geoCoords.lng,
-          locationText: geoCoords.text
+          latitude: geoCoords?.lat,
+          longitude: geoCoords?.lng,
+          locationText: geoCoords?.text
         })
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) throw new Error(data.error || 'Erro ao processar baixa.');
 
       // Disparar confetti visual de celebração da entrega
       if (window.confetti) {
-        window.confetti({ particleCount: 60, spread: 70, origin: { y: 0.7 } });
+        try {
+          window.confetti({ particleCount: 60, spread: 70, origin: { y: 0.7 } });
+        } catch (e) { }
       }
 
-      showToast(data.message, "success");
-      onRefresh();
+      showToast(data.message || 'Baixa realizada com sucesso!', "success");
+      
+      // Atualizar lista em tempo real sem precisar de F5
+      if (typeof onRefresh === 'function') {
+        onRefresh();
+      }
 
       // Abrir o Termo de Entrega oficial para conferência e impressão
-      onOpenTermo(data.request);
+      if (data.request && typeof onOpenTermo === 'function') {
+        onOpenTermo({
+          ...data.request,
+          empresa_nome: data.request.empresa_nome || empresaAtiva?.name || 'Empresa Contratante'
+        });
+      }
     } catch (err) {
       showToast(err.message, "error");
     }
@@ -2430,10 +2442,14 @@ function TabPagamento({ isPremium, subscriptionInfo, currentUser, geoCoords, onR
 // =========================================================================
 // MODAL: TERMO OFICIAL DE ENTREGA E BAIXA DE EPI (NR-06)
 // =========================================================================
-function TermoEntregaModal({ request, onClose }) {
+function TermoEntregaModal({ request, empresaAtiva, onClose }) {
+  if (!request) return null;
+
   const handlePrint = () => {
     window.print();
   };
+
+  const nomeEmpresa = request.empresa_nome || empresaAtiva?.name || 'Empresa Contratante';
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -2459,7 +2475,7 @@ function TermoEntregaModal({ request, onClose }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', background: '#fff', padding: '14px', borderRadius: '8px', border: '1px solid #e2e8f0', margin: '14px 0' }}>
             <div><strong>Colaborador:</strong> {request.colaborador}</div>
             <div><strong>Função:</strong> {request.funcao_colaborador || 'Colaborador'}</div>
-            <div><strong>Empresa:</strong> {empresaAtiva?.name || 'Empresa Contratante'}</div>
+            <div><strong>Empresa:</strong> {nomeEmpresa}</div>
             <div><strong>Data da Entrega:</strong> {formatDate(request.data_aprovacao || request.data_solicitacao)}</div>
           </div>
 

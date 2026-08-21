@@ -726,7 +726,12 @@ app.post('/api/requests/:id/approve', async (req, res) => {
       locationText: locationText || 'Terminal Operacional SST'
     });
 
-    const updatedRequest = await dbGet('SELECT * FROM epi_requests WHERE id = ?', [id]);
+    const updatedRequest = await dbGet(`
+      SELECT r.*, c.name as empresa_nome
+      FROM epi_requests r
+      LEFT JOIN companies c ON r.empresa_id = c.id
+      WHERE r.id = ?
+    `, [id]);
     const updatedMaterial = await dbGet('SELECT * FROM inventory_materials WHERE id = ?', [material.id]);
 
     res.json({
