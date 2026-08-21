@@ -64,9 +64,9 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Usuário e senha são obrigatórios.' });
     }
 
-    const user = await dbGet('SELECT * FROM users WHERE LOWER(username) = LOWER(?)', [username.trim()]);
+    const user = await dbGet('SELECT * FROM users WHERE username = ? COLLATE BINARY', [username.trim()]);
 
-    if (!user || user.password !== password) {
+    if (!user || user.username !== username.trim() || user.password !== password) {
       // Registrar tentativa falha no log de auditoria
       await logAudit({
         userId: user ? user.id : 'unknown',
@@ -78,7 +78,7 @@ app.post('/api/auth/login', async (req, res) => {
         lng: longitude,
         locationText: locationText
       });
-      return res.status(401).json({ error: 'Credenciais inválidas. Verifique o usuário e a senha.' });
+      return res.status(401).json({ error: 'Credenciais inválidas. Verifique se digitou o usuário e a senha respeitando letras maiúsculas e minúsculas exatamente.' });
     }
 
     // Registrar sucesso de login no log de auditoria com geolocalização e data/hora

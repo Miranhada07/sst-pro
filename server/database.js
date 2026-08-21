@@ -296,7 +296,7 @@ export async function initDatabase() {
   ];
 
   for (const u of defaultUsers) {
-    const existing = await dbGet('SELECT * FROM users WHERE LOWER(username) = LOWER(?)', [u.username]);
+    const existing = await dbGet('SELECT * FROM users WHERE username = ? COLLATE BINARY', [u.username]);
     if (!existing) {
       await dbRun(`
         INSERT INTO users (id, username, password, name, role, registration_number, email, phone)
