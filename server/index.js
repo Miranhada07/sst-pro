@@ -376,7 +376,15 @@ app.get('/api/cnpj/lookup/:cnpj', async (req, res) => {
 
 app.get('/api/companies', async (req, res) => {
   try {
-    const companies = await dbAll('SELECT * FROM companies ORDER BY created_at DESC');
+    const { userId } = req.query;
+    let sql = 'SELECT * FROM companies';
+    let params = [];
+    if (userId) {
+      sql += ' WHERE user_id = ?';
+      params.push(userId);
+    }
+    sql += ' ORDER BY created_at DESC';
+    const companies = await dbAll(sql, params);
     res.json({ companies });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -395,9 +403,9 @@ app.post('/api/companies', async (req, res) => {
     const valor = valorMensalidade || (porte === 'pequeno' ? 2500 : 1500);
 
     await dbRun(`
-      INSERT INTO companies (id, name, cnpj, porte, valor_mensalidade, endereco, responsavel, email_contato, telefone_contato)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [companyId, name.trim(), cnpj || '', porte || 'pequeno', valor, endereco || '', responsavel || '', emailContato || '', telefoneContato || '']);
+      INSERT INTO companies (id, user_id, name, cnpj, porte, valor_mensalidade, endereco, responsavel, email_contato, telefone_contato)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [companyId, userId || null, name.trim(), cnpj || '', porte || 'pequeno', valor, endereco || '', responsavel || '', emailContato || '', telefoneContato || '']);
 
     await logAudit({
       userId,
@@ -1013,7 +1021,14 @@ app.post('/api/pix/settings', async (req, res) => {
 
 app.get('/api/payment/status', async (req, res) => {
   try {
-    const sub = await dbGet('SELECT * FROM subscriptions ORDER BY updated_at DESC LIMIT 1');
+    const { userId } = req.query;
+    let sub = null;
+    if (userId) {
+      sub = await dbGet('SELECT * FROM subscriptions WHERE user_id = ?', [userId]);
+    }
+    if (!sub) {
+      sub = await dbGet('SELECT * FROM subscriptions WHERE id = "sub_global" LIMIT 1');
+    }
     res.json({
       isPremium: sub ? Boolean(sub.is_premium) : false,
       subscription: sub ? {
@@ -1054,19 +1069,22 @@ app.post('/api/payment/checkout', async (req, res) => {
       details: paymentDetails || {}
     };
 
-    // Atualizar no banco SQLite local para Plano PRO Ativo
+    const subId = userId ? `sub_${userId}` : 'sub_global';
+
+    // Atualizar/inserir assinatura para o usuário específico no SQLite
     await dbRun(`
-      UPDATE subscriptions 
-      SET is_premium = 1,
-          plan_name = 'SST PRO Desktop Anual/Mensal',
-          payment_method = ?,
-          amount = ?,
-          transaction_id = ?,
-          receipt_json = ?,
-          activated_at = ?,
-          updated_at = datetime('now', 'localtime')
-      WHERE id = 'sub_global'
-    `, [paymentMethod || 'pix', valorPago, txId, JSON.stringify(receipt), dataHora]);
+      INSERT INTO subscriptions (id, user_id, is_premium, plan_name, payment_method, amount, transaction_id, receipt_json, activated_at, updated_at)
+      VALUES (?, ?, 1, 'SST PRO Desktop Anual/Mensal', ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+      ON CONFLICT(id) DO UPDATE SET
+        is_premium = 1,
+        plan_name = 'SST PRO Desktop Anual/Mensal',
+        payment_method = excluded.payment_method,
+        amount = excluded.amount,
+        transaction_id = excluded.transaction_id,
+        receipt_json = excluded.receipt_json,
+        activated_at = excluded.activated_at,
+        updated_at = datetime('now', 'localtime')
+    `, [subId, userId || null, paymentMethod || 'pix', valorPago, txId, JSON.stringify(receipt), dataHora]);
 
     // Registrar no Log de Auditoria
     await logAudit({

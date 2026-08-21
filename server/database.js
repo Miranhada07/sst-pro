@@ -72,10 +72,11 @@ export async function initDatabase() {
     )
   `);
 
-  // 2. Tabela de Empresas Gerenciadas
+  // 2. Tabela de Empresas Gerenciadas (Isoladas por Usuário)
   await dbRun(`
     CREATE TABLE IF NOT EXISTS companies (
       id TEXT PRIMARY KEY,
+      user_id TEXT,
       name TEXT NOT NULL,
       cnpj TEXT,
       porte TEXT NOT NULL DEFAULT 'pequeno',
@@ -84,9 +85,17 @@ export async function initDatabase() {
       responsavel TEXT,
       email_contato TEXT,
       telefone_contato TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
     )
   `);
+
+  // Migration de compatibilidade para garantir coluna user_id
+  try {
+    await dbRun('ALTER TABLE companies ADD COLUMN user_id TEXT');
+  } catch (e) {
+    // Coluna já existe
+  }
 
   // 3. Tabela de Estoque de EPIs / Almoxarifado
   await dbRun(`
@@ -167,10 +176,11 @@ export async function initDatabase() {
     )
   `);
 
-  // 7. Tabela de Assinatura e Pagamentos
+  // 7. Tabela de Assinatura e Pagamentos (Por Usuário)
   await dbRun(`
     CREATE TABLE IF NOT EXISTS subscriptions (
       id TEXT PRIMARY KEY,
+      user_id TEXT,
       is_premium INTEGER NOT NULL DEFAULT 0,
       plan_name TEXT DEFAULT 'Plano Gratuito',
       payment_method TEXT,
@@ -178,9 +188,16 @@ export async function initDatabase() {
       transaction_id TEXT,
       receipt_json TEXT,
       activated_at DATETIME,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
+
+  try {
+    await dbRun('ALTER TABLE subscriptions ADD COLUMN user_id TEXT');
+  } catch (e) {
+    // Coluna já existe
+  }
 
   // 8. Tabela de Sessão do Usuário (Onde parou na máquina)
   await dbRun(`

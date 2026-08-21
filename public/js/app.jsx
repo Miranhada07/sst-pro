@@ -142,23 +142,22 @@ function App() {
     }
   }, []);
 
-  // 2. Verificar Sessão no Carregamento Inicial
+  // 2. Verificar Sessão no Carregamento Inicial (Prioriza aba atual independente)
   useEffect(() => {
     async function checkInitialSession() {
       try {
-        const storedUser = localStorage.getItem('sst_pro_user');
+        const storedUser = sessionStorage.getItem('sst_pro_user') || localStorage.getItem('sst_pro_user');
         if (storedUser) {
           const userObj = JSON.parse(storedUser);
           setCurrentUser(userObj);
 
-          // Buscar onde parou no backend SQLite
+          // Buscar onde este usuário específico parou no banco SQLite
           const resSession = await fetch(`/api/session/${userObj.id}`);
           const dataSession = await resSession.json();
 
           if (dataSession.session) {
             if (dataSession.session.currentTab) setTab(dataSession.session.currentTab);
             if (dataSession.session.currentCompanyId) setEmpresaAtivaId(dataSession.session.currentCompanyId);
-            showToast(`Bem-vindo de volta, ${userObj.name}! Sessão restaurada no ponto onde você parou.`, 'success');
           }
         }
       } catch (err) {
@@ -170,23 +169,23 @@ function App() {
     checkInitialSession();
   }, []);
 
-  // 3. Carregar dados gerais quando logado
+  // 3. Carregar dados gerais quando logado (Isolados por usuário)
   useEffect(() => {
     if (!currentUser) return;
     loadAllData();
   }, [currentUser]);
 
-  // Carregar todos os dados do banco SQLite
+  // Carregar todos os dados do banco SQLite para o usuário autenticado
   async function loadAllData() {
     try {
-      // 1. Status de Pagamento / Assinatura PRO
-      const resPay = await fetch('/api/payment/status');
+      // 1. Status de Pagamento / Assinatura PRO do Usuário
+      const resPay = await fetch(`/api/payment/status?userId=${currentUser.id}`);
       const dataPay = await resPay.json();
       setIsPremium(dataPay.isPremium);
       setSubscriptionInfo(dataPay.subscription);
 
-      // 2. Empresas
-      const resComp = await fetch('/api/companies');
+      // 2. Empresas do Usuário Autenticado
+      const resComp = await fetch(`/api/companies?userId=${currentUser.id}`);
       const dataComp = await resComp.json();
       setEmpresas(dataComp.companies || []);
 
@@ -194,23 +193,23 @@ function App() {
         setEmpresaAtivaId(dataComp.companies[0].id);
       }
 
-      // 3. Materiais
+      // 3. Materiais do Almoxarifado
       const resMat = await fetch('/api/inventory');
       const dataMat = await resMat.json();
       setMateriais(dataMat.materials || []);
 
-      // 4. Solicitações
+      // 4. Solicitações e Entregas
       const resReq = await fetch('/api/requests');
       const dataReq = await resReq.json();
       setSolicitacoes(dataReq.requests || []);
 
-      // 5. Riscos
-      const resRisk = await fetch('/api/risks');
+      // 5. Riscos do Usuário
+      const resRisk = await fetch(`/api/risks?userId=${currentUser.id}`);
       const dataRisk = await resRisk.json();
       setAnalisesRiscos(dataRisk.analyses || []);
 
-      // 6. Auditoria em Tempo Real
-      const resAudit = await fetch('/api/audit');
+      // 6. Auditoria do Usuário em Tempo Real
+      const resAudit = await fetch(`/api/audit?userId=${currentUser.id}`);
       const dataAudit = await resAudit.json();
       setAuditLogs(dataAudit.logs || []);
     } catch (err) {
@@ -253,7 +252,7 @@ function App() {
     { id: "pagamento", label: "Assinatura PRO", icon: "workspace_premium", isFree: true, highlight: !isPremium },
   ];
 
-  // Logout
+  // Logout Totalmente Independente
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', {
@@ -268,8 +267,15 @@ function App() {
         })
       });
     } catch (e) { }
+    sessionStorage.removeItem('sst_pro_user');
     localStorage.removeItem('sst_pro_user');
     setCurrentUser(null);
+    setEmpresas([]);
+    setMateriais([]);
+    setSolicitacoes([]);
+    setAnalisesRiscos([]);
+    setAuditLogs([]);
+    setEmpresaAtivaId(null);
     showToast('Sessão encerrada com sucesso.', 'info');
   };
 
@@ -291,6 +297,7 @@ function App() {
         <LoginScreen
           onLoginSuccess={(user, savedSession) => {
             setCurrentUser(user);
+            sessionStorage.setItem('sst_pro_user', JSON.stringify(user));
             localStorage.setItem('sst_pro_user', JSON.stringify(user));
             if (savedSession) {
               if (savedSession.currentTab) setTab(savedSession.currentTab);
@@ -562,19 +569,19 @@ function App() {
 }
 
 // =========================================================================
-// TELA DE LOGIN PARA O TÉCNICO RESPONSÁVEL
+// TELA DE LOGIN PRIVADA E INDEPENDENTE PARA CADA TÉCNICO
 // =========================================================================
 function LoginScreen({ onLoginSuccess, geoCoords, showToast }) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("1234");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
   const handleLogin = async (e) => {
     if (e) e.preventDefault();
-    if (!username || !password) {
-      setErrorMsg("Preencha o usuário e a senha.");
+    if (!username.trim() || !password.trim()) {
+      setErrorMsg("Informe seu usuário e senha.");
       return;
     }
 
@@ -608,13 +615,6 @@ function LoginScreen({ onLoginSuccess, geoCoords, showToast }) {
     }
   };
 
-  const ACCOUNTS = [
-    { user: 'admin', label: 'Admin Principal', role: 'Responsável Técnico' },
-    { user: 'Eric', label: 'Eric', role: 'Técnico SST' },
-    { user: 'Samuel', label: 'Samuel', role: 'Técnico SST' },
-    { user: 'Victor', label: 'Victor', role: 'Técnico SST' }
-  ];
-
   return (
     <div className="login-container">
       <div className="login-card">
@@ -626,58 +626,7 @@ function LoginScreen({ onLoginSuccess, geoCoords, showToast }) {
           <a href="https://sstpro.com.br" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb', fontSize: '13px', fontWeight: 600, textDecoration: 'none', display: 'block', marginBottom: '4px' }}>
             https://sstpro.com.br
           </a>
-          <p className="login-subtitle">Acesso ao Sistema de Segurança do Trabalho</p>
-        </div>
-
-        {/* Seleção rápida de usuários cadastrados */}
-        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            <Icon name="group" style={{ color: '#2563eb', fontSize: '16px' }} />
-            <span>Selecione o Usuário para Acessar:</span>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-            {ACCOUNTS.map(acc => {
-              const isSelected = username.toLowerCase() === acc.user.toLowerCase();
-              return (
-                <button
-                  key={acc.user}
-                  type="button"
-                  onClick={() => { setUsername(acc.user); setPassword("1234"); setErrorMsg(""); }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '8px 10px',
-                    borderRadius: '8px',
-                    border: isSelected ? '1.5px solid #2563eb' : '1px solid #cbd5e1',
-                    background: isSelected ? '#eff6ff' : '#ffffff',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{
-                    width: '24px',
-                    height: '24px',
-                    borderRadius: '50%',
-                    background: isSelected ? '#2563eb' : '#64748b',
-                    color: '#fff',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '11px',
-                    fontWeight: 700
-                  }}>
-                    {acc.user.charAt(0).toUpperCase()}
-                  </div>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{acc.label}</div>
-                    <div style={{ fontSize: '10px', color: '#64748b' }}>{acc.role}</div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          <p className="login-subtitle">Acesso Restrito ao Técnico de Segurança do Trabalho</p>
         </div>
 
         {errorMsg && (
