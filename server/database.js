@@ -234,23 +234,59 @@ export async function initDatabase() {
     `, ['sub_global', 0, 'Plano Gratuito', 0, new Date().toISOString()]);
   }
 
-  // Inicializar Usuário Padrão Admin (admin / 1234)
-  const adminUser = await dbGet('SELECT * FROM users WHERE username = ?', ['admin']);
-  if (!adminUser) {
-    await dbRun(`
-      INSERT INTO users (id, username, password, name, role, registration_number, email, phone)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      'usr_admin_default',
-      'admin',
-      '1234', // Senha inicial padrão conforme solicitado
-      'Técnico Responsável SST Principal',
-      'admin',
-      'MTE-SST-004521/SP',
-      'admin@sstpro.com.br',
-      '(11) 98765-4321'
-    ]);
-    console.log('[Database] Usuário inicial criado: admin / 1234');
+  // Inicializar Usuários Padrão (admin, Eric, Samuel, Victor)
+  const defaultUsers = [
+    {
+      id: 'usr_admin_default',
+      username: 'admin',
+      password: '1234',
+      name: 'Técnico Responsável SST Principal',
+      role: 'admin',
+      reg: 'MTE-SST-004521/SP',
+      email: 'admin@sstpro.com.br',
+      phone: '(11) 98765-4321'
+    },
+    {
+      id: 'usr_eric',
+      username: 'Eric',
+      password: '1234',
+      name: 'Eric - Técnico SST',
+      role: 'technician',
+      reg: 'MTE-SST-004522/SP',
+      email: 'eric@sstpro.com.br',
+      phone: '(11) 98765-4322'
+    },
+    {
+      id: 'usr_samuel',
+      username: 'Samuel',
+      password: '1234',
+      name: 'Samuel - Técnico SST',
+      role: 'technician',
+      reg: 'MTE-SST-004523/SP',
+      email: 'samuel@sstpro.com.br',
+      phone: '(11) 98765-4323'
+    },
+    {
+      id: 'usr_victor',
+      username: 'Victor',
+      password: '1234',
+      name: 'Victor - Técnico SST',
+      role: 'technician',
+      reg: 'MTE-SST-004524/SP',
+      email: 'victor@sstpro.com.br',
+      phone: '(11) 98765-4324'
+    }
+  ];
+
+  for (const u of defaultUsers) {
+    const existing = await dbGet('SELECT * FROM users WHERE LOWER(username) = LOWER(?)', [u.username]);
+    if (!existing) {
+      await dbRun(`
+        INSERT INTO users (id, username, password, name, role, registration_number, email, phone)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [u.id, u.username, u.password, u.name, u.role, u.reg, u.email, u.phone]);
+      console.log(`[Database] Usuário criado: ${u.username} / ${u.password}`);
+    }
   }
 
   console.log('[Database] Todas as tabelas e índices verificados e prontos.');

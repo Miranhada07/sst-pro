@@ -177,6 +177,58 @@ app.post('/api/auth/logout', async (req, res) => {
   }
 });
 
+// Listar todos os usuários/técnicos cadastrados
+app.get('/api/users', async (req, res) => {
+  try {
+    const users = await dbAll('SELECT id, username, name, role, registration_number, email, phone, created_at FROM users ORDER BY created_at ASC');
+    res.json({ users });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Cadastrar novo usuário/técnico
+app.post('/api/users', async (req, res) => {
+  try {
+    const { username, password, name, role, registrationNumber, email, phone, authorId, authorName } = req.body;
+    if (!username || !password || !name) {
+      return res.status(400).json({ error: 'Usuário, senha e nome são obrigatórios.' });
+    }
+
+    const existing = await dbGet('SELECT * FROM users WHERE LOWER(username) = LOWER(?)', [username.trim()]);
+    if (existing) {
+      return res.status(400).json({ error: `O usuário '${username}' já existe no sistema.` });
+    }
+
+    const newId = uid('usr');
+    await dbRun(`
+      INSERT INTO users (id, username, password, name, role, registration_number, email, phone)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      newId,
+      username.trim(),
+      password.trim(),
+      name.trim(),
+      role || 'technician',
+      registrationNumber || 'MTE-SST-PENDENTE',
+      email || `${username.toLowerCase()}@sstpro.com.br`,
+      phone || '(11) 98765-0000'
+    ]);
+
+    await logAudit({
+      userId: authorId || newId,
+      username: authorName || username,
+      action: 'USER_CREATED',
+      description: `Novo acesso de técnico criado: '${username.trim()}' (${name.trim()}).`
+    });
+
+    const created = await dbGet('SELECT id, username, name, role, registration_number, email, phone, created_at FROM users WHERE id = ?', [newId]);
+    res.json({ success: true, user: created });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // =========================================================================
 // 2. PERSISTÊNCIA DE SESSÃO / ONDE PAROU
 // =========================================================================

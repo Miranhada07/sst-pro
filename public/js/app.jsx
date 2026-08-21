@@ -608,11 +608,12 @@ function LoginScreen({ onLoginSuccess, geoCoords, showToast }) {
     }
   };
 
-  const setDemoCredentials = () => {
-    setUsername("admin");
-    setPassword("1234");
-    setErrorMsg("");
-  };
+  const ACCOUNTS = [
+    { user: 'admin', label: 'Admin Principal', role: 'Responsável Técnico' },
+    { user: 'Eric', label: 'Eric', role: 'Técnico SST' },
+    { user: 'Samuel', label: 'Samuel', role: 'Técnico SST' },
+    { user: 'Victor', label: 'Victor', role: 'Técnico SST' }
+  ];
 
   return (
     <div className="login-container">
@@ -625,18 +626,58 @@ function LoginScreen({ onLoginSuccess, geoCoords, showToast }) {
           <a href="https://sstpro.com.br" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb', fontSize: '13px', fontWeight: 600, textDecoration: 'none', display: 'block', marginBottom: '4px' }}>
             https://sstpro.com.br
           </a>
-          <p className="login-subtitle">Acesso Restrito ao Técnico de Segurança Responsável</p>
+          <p className="login-subtitle">Acesso ao Sistema de Segurança do Trabalho</p>
         </div>
 
-        {/* Dica de credenciais padrão solicitadas no prompt */}
-        <div className="login-credentials-box" onClick={setDemoCredentials} style={{ cursor: 'pointer' }} title="Clique para preencher automaticamente">
-          <Icon name="key" style={{ color: '#2563eb', fontSize: '20px' }} />
-          <div style={{ flex: 1 }}>
-            <strong>Credenciais Iniciais Padrão:</strong><br />
-            Usuário: <code style={{ background: '#e2e8f0', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>admin</code> &nbsp;|&nbsp;
-            Senha: <code style={{ background: '#e2e8f0', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>1234</code>
+        {/* Seleção rápida de usuários cadastrados */}
+        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            <Icon name="group" style={{ color: '#2563eb', fontSize: '16px' }} />
+            <span>Selecione o Usuário para Acessar:</span>
           </div>
-          <span style={{ fontSize: '11px', color: '#2563eb', fontWeight: 700 }}>Autopreencher</span>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {ACCOUNTS.map(acc => {
+              const isSelected = username.toLowerCase() === acc.user.toLowerCase();
+              return (
+                <button
+                  key={acc.user}
+                  type="button"
+                  onClick={() => { setUsername(acc.user); setPassword("1234"); setErrorMsg(""); }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 10px',
+                    borderRadius: '8px',
+                    border: isSelected ? '1.5px solid #2563eb' : '1px solid #cbd5e1',
+                    background: isSelected ? '#eff6ff' : '#ffffff',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <div style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    background: isSelected ? '#2563eb' : '#64748b',
+                    color: '#fff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '11px',
+                    fontWeight: 700
+                  }}>
+                    {acc.user.charAt(0).toUpperCase()}
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{acc.label}</div>
+                    <div style={{ fontSize: '10px', color: '#64748b' }}>{acc.role}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {errorMsg && (
