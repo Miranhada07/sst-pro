@@ -978,38 +978,47 @@ function TabEmpresas({ empresas, currentUser, geoCoords, onRefresh, setEmpresaAt
 }
 
 // =========================================================================
-// ABA 2: ANÁLISE DE RISCOS COM FOTOS (MÚLTIPLAS CATEGORIAS POR FORMULÁRIO)
+// ABA 2: ANÁLISE DE RISCOS COM FOTOS (RISCOS INDIVIDUAIS POR FORMULÁRIO)
 // =========================================================================
 function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onRefresh, showToast }) {
   const [local, setLocal] = useState("");
   const [setor, setSetor] = useState("");
-  const [tiposSelecionados, setTiposSelecionados] = useState(["Físico"]);
-  const [nivelRisco, setNivelRisco] = useState("Médio");
-  const [riscos, setRiscos] = useState("");
-  const [medidas, setMedidas] = useState("");
   const [foto, setFoto] = useState(null);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef(null);
 
+  const [itensRisco, setItensRisco] = useState([
+    { id: 1, tipoRisco: "Físico", nivelRisco: "Médio", riscos: "", medidasPreventivas: "" }
+  ]);
+
   const CATEGORIAS_RISCO = [
-    { id: "Físico", label: "Físico (Ruído/Calor/Vibração)", icon: "hearing", color: "#2563eb", bg: "#eff6ff", border: "#bfdbfe" },
-    { id: "Químico", label: "Químico (Poeiras/Vapores/Fumos)", icon: "science", color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
-    { id: "Biológico", label: "Biológico (Bactérias/Vírus/Fungos)", icon: "coronavirus", color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0" },
-    { id: "Ergonômico", label: "Ergonômico (Postura/Peso/Esforço)", icon: "accessibility_new", color: "#d97706", bg: "#fffbeb", border: "#fde68a" },
-    { id: "Acidente / Altura", label: "Acidente / Altura / Choque", icon: "warning", color: "#9333ea", bg: "#faf5ff", border: "#e9d5ff" },
-    { id: "Psicossocial / Outros", label: "Outros Riscos Ocupacionais", icon: "security", color: "#0891b2", bg: "#ecfeff", border: "#a5f3fc" }
+    { id: "Físico", label: "Físico (Ruído/Calor/Vibração/Radiação)", icon: "hearing" },
+    { id: "Químico", label: "Químico (Poeiras/Vapores/Gases/Fumos)", icon: "science" },
+    { id: "Biológico", label: "Biológico (Bactérias/Vírus/Fungos/Parasitas)", icon: "coronavirus" },
+    { id: "Ergonômico", label: "Ergonômico (Postura/Peso/Esforço Repetitivo)", icon: "accessibility_new" },
+    { id: "Acidente / Altura", label: "Acidente / Altura / Choque / Máquinas", icon: "warning" },
+    { id: "Psicossocial / Outros", label: "Psicossocial / Outros Riscos Ocupacionais", icon: "security" }
   ];
 
-  const toggleTipoRisco = (tipoId) => {
-    if (tiposSelecionados.includes(tipoId)) {
-      if (tiposSelecionados.length > 1) {
-        setTiposSelecionados(tiposSelecionados.filter(t => t !== tipoId));
-      } else {
-        showToast("Selecione pelo menos uma categoria de risco.", "warning");
-      }
+  const adicionarRisco = () => {
+    setItensRisco([
+      ...itensRisco,
+      { id: Date.now(), tipoRisco: "Acidente / Altura", nivelRisco: "Médio", riscos: "", medidasPreventivas: "" }
+    ]);
+  };
+
+  const removerRisco = (index) => {
+    if (itensRisco.length > 1) {
+      setItensRisco(itensRisco.filter((_, i) => i !== index));
     } else {
-      setTiposSelecionados([...tiposSelecionados, tipoId]);
+      showToast("A inspeção deve conter pelo menos um risco.", "warning");
     }
+  };
+
+  const atualizarRisco = (index, campo, valor) => {
+    const novos = [...itensRisco];
+    novos[index][campo] = valor;
+    setItensRisco(novos);
   };
 
   if (!empresaAtiva) {
@@ -1034,12 +1043,15 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
 
   const handleSalvar = async (e) => {
     if (e) e.preventDefault();
-    if (!local.trim() || !riscos.trim()) {
-      return showToast("Preencha o local inspecionado e a descrição dos riscos.", "error");
+    if (!local.trim()) {
+      return showToast("Preencha o local / posto de trabalho inspecionado.", "error");
     }
 
-    if (tiposSelecionados.length === 0) {
-      return showToast("Selecione ao menos uma categoria de risco.", "error");
+    // Validar se todos os riscos individuais foram preenchidos
+    for (let i = 0; i < itensRisco.length; i++) {
+      if (!itensRisco[i].riscos.trim()) {
+        return showToast(`Preencha a descrição detalhada para o Risco #${i + 1}.`, "error");
+      }
     }
 
     setLoading(true);
@@ -1051,10 +1063,12 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
           empresaId: empresaAtiva.id,
           local: local.trim(),
           setor: setor.trim(),
-          tipoRisco: tiposSelecionados.join(', '),
-          nivelRisco,
-          riscos: riscos.trim(),
-          medidasPreventivas: medidas.trim(),
+          items: itensRisco.map(r => ({
+            tipoRisco: r.tipoRisco,
+            nivelRisco: r.nivelRisco,
+            riscos: r.riscos.trim(),
+            medidasPreventivas: r.medidasPreventivas.trim()
+          })),
           foto,
           registradoPor: currentUser?.name || 'Técnico Responsável',
           userId: currentUser?.id,
@@ -1068,9 +1082,9 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      showToast("Relatório de inspeção de risco registrado com sucesso!", "success");
-      setLocal(""); setSetor(""); setRiscos(""); setMedidas(""); setFoto(null);
-      setTiposSelecionados(["Físico"]);
+      showToast(data.message || `${itensRisco.length} risco(s) individual(is) registrado(s) com sucesso!`, "success");
+      setLocal(""); setSetor(""); setFoto(null);
+      setItensRisco([{ id: 1, tipoRisco: "Físico", nivelRisco: "Médio", riscos: "", medidasPreventivas: "" }]);
       onRefresh();
     } catch (err) {
       showToast(err.message, "error");
@@ -1097,12 +1111,12 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
 
   return (
     <div className="grid-layout">
-      {/* Formulário de Registro de Riscos */}
+      {/* Formulário de Registro de Riscos Individuais */}
       <div className="card">
         <div className="card-header">
           <div className="card-title-group">
             <Icon name="security" style={{ color: '#2563eb' }} />
-            <span>Nova Inspeção de Campo (Múltiplos Riscos)</span>
+            <span>Nova Inspeção de Riscos Individuais</span>
           </div>
           <span className="badge badge-free">{empresaAtiva.name}</span>
         </div>
@@ -1117,57 +1131,13 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
             required
           />
 
-          {/* Seleção Múltipla de Riscos */}
-          <div style={{ marginBottom: '16px' }}>
-            <label className="label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>Categorias de Riscos Identificados * (Selecione 1 ou mais)</span>
-              <span style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600 }}>
-                {tiposSelecionados.length} selecionada(s)
-              </span>
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
-              {CATEGORIAS_RISCO.map((cat) => {
-                const isSelected = tiposSelecionados.includes(cat.id);
-                return (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => toggleTipoRisco(cat.id)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '8px 10px',
-                      borderRadius: '8px',
-                      border: isSelected ? `2px solid ${cat.color}` : '1px solid #cbd5e1',
-                      background: isSelected ? cat.bg : '#ffffff',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      transition: 'all 0.15s ease'
-                    }}
-                  >
-                    <Icon name={cat.icon} style={{ fontSize: '18px', color: isSelected ? cat.color : '#64748b' }} />
-                    <span style={{ fontSize: '12px', fontWeight: isSelected ? 700 : 500, color: isSelected ? '#0f172a' : '#475569', flex: 1 }}>
-                      {cat.label}
-                    </span>
-                    {isSelected && (
-                      <Icon name="check_circle" style={{ fontSize: '16px', color: cat.color }} />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div style={{ marginBottom: '16px' }}>
-            <label className="label">Nível Geral de Severidade / Criticidade</label>
-            <select className="select" value={nivelRisco} onChange={(e) => setNivelRisco(e.target.value)}>
-              <option value="Baixo">Baixo (Tolerável)</option>
-              <option value="Médio">Médio (Atenção)</option>
-              <option value="Alto">Alto (Grave)</option>
-              <option value="Crítico">Crítico (Iminente)</option>
-            </select>
-          </div>
+          <label className="label">Setor / Área Operacional</label>
+          <input
+            className="input"
+            value={setor}
+            onChange={(e) => setSetor(e.target.value)}
+            placeholder="Ex: Produção, Manutenção, Obras"
+          />
 
           <label className="label">Evidência Fotográfica de Campo (Câmera / Upload)</label>
           <input
@@ -1193,34 +1163,116 @@ function TabReconhecimento({ empresaAtiva, analises, currentUser, geoCoords, onR
               <React.Fragment>
                 <Icon name="photo_camera" style={{ fontSize: '36px', color: '#94a3b8', marginBottom: '8px' }} />
                 <span style={{ fontSize: '14px', color: '#475569', fontWeight: 600 }}>
-                  Clique para tirar foto ou selecionar imagem
+                  Clique para tirar foto ou anexar imagem da inspeção
                 </span>
-                <span style={{ fontSize: '11px', color: '#94a3b8' }}>Gravado diretamente no banco SQLite local</span>
+                <span style={{ fontSize: '11px', color: '#94a3b8' }}>Gravado no banco SQLite local com geolocalização</span>
               </React.Fragment>
             )}
           </div>
 
-          <label className="label">Descrição Detalhada do Risco Identificado *</label>
-          <textarea
-            className="textarea"
-            style={{ height: '90px', resize: 'vertical' }}
-            value={riscos}
-            onChange={(e) => setRiscos(e.target.value)}
-            placeholder="Descreva as não-conformidades, condições perigosas e riscos à integridade do trabalhador..."
-            required
-          />
+          {/* Lista de Riscos Individuais */}
+          <div style={{ marginTop: '16px', borderTop: '1px solid #e2e8f0', paddingTop: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <strong style={{ fontSize: '13px', color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                🛡️ Riscos Identificados no Local ({itensRisco.length})
+              </strong>
+              <button
+                type="button"
+                className="btn btn-outline"
+                style={{ width: 'auto', padding: '4px 10px', fontSize: '12px', borderColor: '#2563eb', color: '#2563eb' }}
+                onClick={adicionarRisco}
+              >
+                <Icon name="add" style={{ fontSize: '16px' }} /> + Adicionar Outro Risco
+              </button>
+            </div>
 
-          <label className="label">Medidas de Controle / Ações Preventivas Recomendadas</label>
-          <textarea
-            className="textarea"
-            style={{ height: '70px', resize: 'vertical' }}
-            value={medidas}
-            onChange={(e) => setMedidas(e.target.value)}
-            placeholder="EPIs necessários, adequação de proteção coletiva (EPC), treinamento NR..."
-          />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {itensRisco.map((item, index) => (
+                <div
+                  key={item.id || index}
+                  style={{
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '10px',
+                    padding: '14px',
+                    position: 'relative'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: '#2563eb', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Icon name="warning" style={{ fontSize: '16px' }} />
+                      Risco Individual #{index + 1}
+                    </span>
+                    {itensRisco.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removerRisco(index)}
+                        style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', padding: '2px 6px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '2px' }}
+                        title="Remover este risco"
+                      >
+                        <Icon name="delete" style={{ fontSize: '16px' }} /> Remover
+                      </button>
+                    )}
+                  </div>
 
-          <button type="submit" className="btn btn-primary" disabled={loading}>
-            <Icon name="save" /> Registrar Relatório de Inspeção
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '8px' }}>
+                    <div>
+                      <label className="label" style={{ fontSize: '12px' }}>Categoria do Risco *</label>
+                      <select
+                        className="select"
+                        value={item.tipoRisco}
+                        onChange={(e) => atualizarRisco(index, 'tipoRisco', e.target.value)}
+                      >
+                        {CATEGORIAS_RISCO.map(c => (
+                          <option key={c.id} value={c.id}>{c.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="label" style={{ fontSize: '12px' }}>Severidade *</label>
+                      <select
+                        className="select"
+                        value={item.nivelRisco}
+                        onChange={(e) => atualizarRisco(index, 'nivelRisco', e.target.value)}
+                      >
+                        <option value="Baixo">Baixo (Tolerável)</option>
+                        <option value="Médio">Médio (Atenção)</option>
+                        <option value="Alto">Alto (Grave)</option>
+                        <option value="Crítico">Crítico (Iminente)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: '8px' }}>
+                    <label className="label" style={{ fontSize: '12px' }}>Descrição Detalhada do Risco *</label>
+                    <textarea
+                      className="textarea"
+                      style={{ height: '70px', resize: 'vertical' }}
+                      value={item.riscos}
+                      onChange={(e) => atualizarRisco(index, 'riscos', e.target.value)}
+                      placeholder="Descreva a não-conformidade, fontes geradoras e perigos..."
+                      required
+                    />
+                  </div>
+
+                  <div style={{ marginTop: '8px' }}>
+                    <label className="label" style={{ fontSize: '12px' }}>Medidas Preventivas / Recomendações</label>
+                    <textarea
+                      className="textarea"
+                      style={{ height: '60px', resize: 'vertical' }}
+                      value={item.medidasPreventivas}
+                      onChange={(e) => atualizarRisco(index, 'medidasPreventivas', e.target.value)}
+                      placeholder="EPIs, EPCs ou procedimentos de segurança recomendados..."
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button type="submit" className="btn btn-primary" disabled={loading} style={{ marginTop: '16px' }}>
+            <Icon name="save" /> Registrar Inspeção com ({itensRisco.length}) Risco(s)
           </button>
         </form>
       </div>

@@ -823,46 +823,65 @@ app.get('/api/risks', async (req, res) => {
 
 app.post('/api/risks', async (req, res) => {
   try {
-    const { empresaId, local, setor, tipoRisco, nivelRisco, riscos, medidasPreventivas, foto, registradoPor, userId, username, latitude, longitude, locationText } = req.body;
+    const { empresaId, local, setor, tipoRisco, nivelRisco, riscos, medidasPreventivas, items, foto, registradoPor, userId, username, latitude, longitude, locationText } = req.body;
 
-    if (!empresaId || !local || !riscos) {
-      return res.status(400).json({ error: 'Empresa, Local e Descrição dos Riscos são obrigatórios.' });
+    if (!empresaId || !local) {
+      return res.status(400).json({ error: 'Empresa e Local inspecionado são obrigatórios.' });
     }
 
-    const riskId = uid('risk');
-    const dataStr = new Date().toLocaleDateString('pt-BR');
+    const itemsToProcess = (items && Array.isArray(items) && items.length > 0)
+      ? items
+      : [{ tipoRisco: tipoRisco || 'Físico', nivelRisco: nivelRisco || 'Médio', riscos: riscos || '', medidasPreventivas: medidasPreventivas || '' }];
 
-    await dbRun(`
-      INSERT INTO risk_analyses (id, empresa_id, local, setor, tipo_risco, nivel_risco, riscos, medidas_preventivas, foto, registrado_por, data)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      riskId,
-      empresaId,
-      local.trim(),
-      setor || 'Geral',
-      tipoRisco || 'Físico',
-      nivelRisco || 'Médio',
-      riscos.trim(),
-      medidasPreventivas || '',
-      foto || null,
-      registradoPor || username || 'Técnico Responsável',
-      dataStr
-    ]);
+    const validItems = itemsToProcess.filter(it => it.riscos && it.riscos.trim());
+    if (validItems.length === 0) {
+      return res.status(400).json({ error: 'Informe a descrição de pelo menos um risco identificado.' });
+    }
+
+    const dataStr = new Date().toLocaleDateString('pt-BR');
+    const createdAnalyses = [];
+
+    for (const item of validItems) {
+      const riskId = uid('risk');
+      await dbRun(`
+        INSERT INTO risk_analyses (id, empresa_id, local, setor, tipo_risco, nivel_risco, riscos, medidas_preventivas, foto, registrado_por, data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        riskId,
+        empresaId,
+        local.trim(),
+        setor || 'Geral',
+        item.tipoRisco || 'Físico',
+        item.nivelRisco || 'Médio',
+        item.riscos.trim(),
+        item.medidasPreventivas || '',
+        foto || null,
+        registradoPor || username || 'Técnico Responsável',
+        dataStr
+      ]);
+
+      const newAnalysis = await dbGet('SELECT * FROM risk_analyses WHERE id = ?', [riskId]);
+      createdAnalyses.push(newAnalysis);
+    }
 
     await logAudit({
       userId,
       username,
       action: 'RISK_INSPECTION_CREATED',
-      description: `Nova Inspeção de Riscos registrada no setor '${local.trim()}' (Nível: ${nivelRisco || 'Médio'}, Tipo: ${tipoRisco || 'Físico'})${foto ? ' com registro fotográfico anexado' : ''}.`,
-      details: { riskId, empresaId, local, tipoRisco, nivelRisco, hasPhoto: !!foto },
+      description: `Inspeção de Riscos registrada no local '${local.trim()}' com ${createdAnalyses.length} risco(s) individual(is) detalhado(s)${foto ? ' e foto anexada' : ''}.`,
+      details: { totalRiscos: createdAnalyses.length, local, hasPhoto: !!foto },
       ip: getClientIp(req),
       lat: latitude,
       lng: longitude,
       locationText
     });
 
-    const newAnalysis = await dbGet('SELECT * FROM risk_analyses WHERE id = ?', [riskId]);
-    res.status(201).json({ analysis: newAnalysis });
+    res.status(201).json({
+      success: true,
+      analysis: createdAnalyses[0],
+      analyses: createdAnalyses,
+      message: `${createdAnalyses.length} risco(s) registrado(s) com sucesso na inspeção de '${local}'.`
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
