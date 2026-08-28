@@ -19,6 +19,18 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Servir arquivos estáticos do frontend
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
+// Health Check para monitoramento 24/7/365 e Keep-Alive
+app.get(['/api/health', '/healthz'], (req, res) => {
+  res.json({
+    status: 'online',
+    service: 'SST PRO 24/7 Cloud & Local',
+    uptime: `${Math.floor(process.uptime())}s`,
+    timestamp: new Date().toISOString(),
+    database: 'SQLite local ativo',
+    officialUrl: 'https://sstpro.com.br'
+  });
+});
+
 // Helper de ID único
 const uid = (prefix = 'id') => `${prefix}_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
 

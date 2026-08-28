@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "runId": "20260823-181909-380",
+  "strategy": "merge",
+  "toolkitVersion": "2026.7.27",
+  "createdAt": "2026-08-23T18:19:09.641Z",
+  "backupDir": "/home/tata/Documentos/Google Antigravity/.ag-kit-backups/20260823-181909-380",
+  "summary": {
+    "actions": 0,
+    "conflicts": 0,
+    "preserved": 0,
+    "unchanged": 221
+  },
+  "actions": [],
+  "conflicts": [],
+  "preserved": []
+}

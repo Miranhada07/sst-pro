@@ -1,0 +1,20 @@
+[Unit]
+Description=SST PRO Server 24/7 Service
+After=network.target
+
+[Service]
+Type=simple
+User=tata
+WorkingDirectory=/home/tata/Documentos/Google Antigravity
+ExecStart=/usr/bin/node /home/tata/Documentos/Google Antigravity/server/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+# Logs do serviço
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
