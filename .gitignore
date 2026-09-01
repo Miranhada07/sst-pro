@@ -3,3 +3,6 @@ bin/
 *.log
 .DS_Store
 *.sqlite-journal
+.env
+.env.local
+

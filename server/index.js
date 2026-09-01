@@ -3,7 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { initDatabase, dbRun, dbGet, dbAll } from './database.js';
-import { generatePixPayload, generatePixQRCodeDataURL } from './pix.js';
+import { startGitAutoSync, syncWithGithub } from './git-sync.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -184,58 +184,6 @@ app.post('/api/auth/logout', async (req, res) => {
       locationText
     });
     res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Listar todos os usuários/técnicos cadastrados
-app.get('/api/users', async (req, res) => {
-  try {
-    const users = await dbAll('SELECT id, username, name, role, registration_number, email, phone, created_at FROM users ORDER BY created_at ASC');
-    res.json({ users });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Cadastrar novo usuário/técnico
-app.post('/api/users', async (req, res) => {
-  try {
-    const { username, password, name, role, registrationNumber, email, phone, authorId, authorName } = req.body;
-    if (!username || !password || !name) {
-      return res.status(400).json({ error: 'Usuário, senha e nome são obrigatórios.' });
-    }
-
-    const existing = await dbGet('SELECT * FROM users WHERE LOWER(username) = LOWER(?)', [username.trim()]);
-    if (existing) {
-      return res.status(400).json({ error: `O usuário '${username}' já existe no sistema.` });
-    }
-
-    const newId = uid('usr');
-    await dbRun(`
-      INSERT INTO users (id, username, password, name, role, registration_number, email, phone)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      newId,
-      username.trim(),
-      password.trim(),
-      name.trim(),
-      role || 'technician',
-      registrationNumber || 'MTE-SST-PENDENTE',
-      email || `${username.toLowerCase()}@sstpro.com.br`,
-      phone || '(11) 98765-0000'
-    ]);
-
-    await logAudit({
-      userId: authorId || newId,
-      username: authorName || username,
-      action: 'USER_CREATED',
-      description: `Novo acesso de técnico criado: '${username.trim()}' (${name.trim()}).`
-    });
-
-    const created = await dbGet('SELECT id, username, name, role, registration_number, email, phone, created_at FROM users WHERE id = ?', [newId]);
-    res.json({ success: true, user: created });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -961,238 +909,180 @@ app.post('/api/audit/event', async (req, res) => {
 });
 
 // =========================================================================
-// 8. ROTAS DE PAGAMENTO E ASSINATURA PRO (PIX, CRÉDITO, DÉBITO, BOLETO)
+// 8. ROTAS DE GESTÃO DE USUÁRIOS, EQUIPE E PERMISSÕES (RBAC)
 // =========================================================================
 
-// Obter dados e QR Code real do PIX
-app.get('/api/pix/data', async (req, res) => {
+// Listar todos os usuários/funcionários cadastrados
+app.get('/api/users', async (req, res) => {
   try {
-    let config = await dbGet('SELECT * FROM pix_settings WHERE id = ?', ['global_pix']);
-    if (!config) {
-      config = {
-        pix_key: 'contato@sstpro.com.br',
-        key_type: 'email',
-        merchant_name: 'SST PRO SISTEMAS',
-        merchant_city: 'SAO PAULO',
-        amount: 149.90,
-        tx_id: 'SSTPRO149'
-      };
-    }
-
-    const payloadResult = generatePixPayload({
-      pixKey: config.pix_key,
-      merchantName: config.merchant_name,
-      merchantCity: config.merchant_city,
-      amount: config.amount || 149.90,
-      txId: config.tx_id || 'SSTPRO149'
-    });
-
-    const qrCodeDataUrl = await generatePixQRCodeDataURL(payloadResult.pixCode);
-
-    res.json({
-      success: true,
-      config,
-      pixCode: payloadResult.pixCode,
-      qrCodeDataUrl,
-      amount: payloadResult.amount,
-      merchantName: payloadResult.merchantName,
-      merchantCity: payloadResult.merchantCity,
-      txId: payloadResult.txId,
-      pixKey: payloadResult.pixKey
-    });
-  } catch (err) {
-    console.error('[PixData] Erro:', err);
-    res.status(500).json({ error: 'Erro ao gerar dados do PIX: ' + err.message });
-  }
-});
-
-// Atualizar chave PIX e beneficiário no sistema
-app.post('/api/pix/settings', async (req, res) => {
-  try {
-    const { pixKey, keyType, merchantName, merchantCity, amount, txId, userId, username } = req.body;
-
-    if (!pixKey || !pixKey.trim()) {
-      return res.status(400).json({ error: 'Chave PIX é obrigatória.' });
-    }
-
-    const cleanKey = pixKey.trim();
-    const cleanType = keyType || 'email';
-    const cleanName = (merchantName || 'SST PRO SISTEMAS').trim();
-    const cleanCity = (merchantCity || 'SAO PAULO').trim();
-    const cleanAmount = Number(amount) || 149.90;
-    const cleanTxId = (txId || 'SSTPRO149').trim();
-
-    await dbRun(`
-      INSERT INTO pix_settings (id, pix_key, key_type, merchant_name, merchant_city, amount, tx_id, updated_at)
-      VALUES ('global_pix', ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
-      ON CONFLICT(id) DO UPDATE SET
-        pix_key = excluded.pix_key,
-        key_type = excluded.key_type,
-        merchant_name = excluded.merchant_name,
-        merchant_city = excluded.merchant_city,
-        amount = excluded.amount,
-        tx_id = excluded.tx_id,
-        updated_at = datetime('now', 'localtime')
-    `, [cleanKey, cleanType, cleanName, cleanCity, cleanAmount, cleanTxId]);
-
-    const payloadResult = generatePixPayload({
-      pixKey: cleanKey,
-      merchantName: cleanName,
-      merchantCity: cleanCity,
-      amount: cleanAmount,
-      txId: cleanTxId
-    });
-
-    const qrCodeDataUrl = await generatePixQRCodeDataURL(payloadResult.pixCode);
-
-    await logAudit({
-      userId,
-      username,
-      action: 'PIX_SETTINGS_UPDATED',
-      description: `Configuração da Chave PIX atualizada no sistema para '${cleanKey}' (${cleanName}).`,
-      details: { pixKey: cleanKey, merchantName: cleanName, amount: cleanAmount },
-      ip: getClientIp(req)
-    });
-
-    res.json({
-      success: true,
-      message: 'Chave PIX e QR Code atualizados com sucesso!',
-      pixCode: payloadResult.pixCode,
-      qrCodeDataUrl,
-      config: {
-        pix_key: cleanKey,
-        key_type: cleanType,
-        merchant_name: cleanName,
-        merchant_city: cleanCity,
-        amount: cleanAmount,
-        tx_id: cleanTxId
-      }
-    });
-  } catch (err) {
-    console.error('[PixSettings] Erro:', err);
-    res.status(500).json({ error: 'Erro ao atualizar chave PIX: ' + err.message });
-  }
-});
-
-app.get('/api/payment/status', async (req, res) => {
-  try {
-    const { userId } = req.query;
-    let sub = null;
-    if (userId) {
-      sub = await dbGet('SELECT * FROM subscriptions WHERE user_id = ?', [userId]);
-    }
-    if (!sub) {
-      sub = await dbGet('SELECT * FROM subscriptions WHERE id = "sub_global" LIMIT 1');
-    }
-    res.json({
-      isPremium: sub ? Boolean(sub.is_premium) : false,
-      subscription: sub ? {
-        planName: sub.plan_name,
-        paymentMethod: sub.payment_method,
-        amount: sub.amount,
-        transactionId: sub.transaction_id,
-        activatedAt: sub.activated_at,
-        receipt: sub.receipt_json ? JSON.parse(sub.receipt_json) : null
-      } : null
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Processar pagamento e ativar PRO com comprovante
-app.post('/api/payment/checkout', async (req, res) => {
-  try {
-    const { paymentMethod, paymentDetails, amount, userId, username, latitude, longitude, locationText } = req.body;
-
-    const txId = uid('tx_sst');
-    const valorPago = amount || 149.00;
-    const dataHora = new Date().toISOString();
-
-    const receipt = {
-      transactionId: txId,
-      status: 'CONFIRMADO_APROVADO',
-      paymentMethod: paymentMethod || 'pix',
-      amount: valorPago,
-      currency: 'BRL',
-      planName: 'SST PRO - Gestão Completa Desktop',
-      beneficiary: 'SST PRO Sistemas de Segurança Ltda',
-      cnpj: '48.910.112/0001-34',
-      subscriber: username || 'Técnico Responsável',
-      authCode: `AUTH-${Math.random().toString(36).substring(2, 10).toUpperCase()}-${Date.now()}`,
-      issuedAt: new Date().toLocaleString('pt-BR'),
-      details: paymentDetails || {}
-    };
-
-    const subId = userId ? `sub_${userId}` : 'sub_global';
-
-    // Atualizar/inserir assinatura para o usuário específico no SQLite
-    await dbRun(`
-      INSERT INTO subscriptions (id, user_id, is_premium, plan_name, payment_method, amount, transaction_id, receipt_json, activated_at, updated_at)
-      VALUES (?, ?, 1, 'SST PRO Desktop Anual/Mensal', ?, ?, ?, ?, ?, datetime('now', 'localtime'))
-      ON CONFLICT(id) DO UPDATE SET
-        is_premium = 1,
-        plan_name = 'SST PRO Desktop Anual/Mensal',
-        payment_method = excluded.payment_method,
-        amount = excluded.amount,
-        transaction_id = excluded.transaction_id,
-        receipt_json = excluded.receipt_json,
-        activated_at = excluded.activated_at,
-        updated_at = datetime('now', 'localtime')
-    `, [subId, userId || null, paymentMethod || 'pix', valorPago, txId, JSON.stringify(receipt), dataHora]);
-
-    // Registrar no Log de Auditoria
-    await logAudit({
-      userId,
-      username,
-      action: 'PAYMENT_PRO_ACTIVATED',
-      description: `Assinatura PRO Ativada com Sucesso via [${(paymentMethod || 'PIX').toUpperCase()}]. Todas as funcionalidades avançadas foram liberadas no banco de dados.`,
-      details: { transactionId: txId, method: paymentMethod, amount: valorPago },
-      ip: getClientIp(req),
-      lat: latitude,
-      lng: longitude,
-      locationText: locationText || 'Checkout Online'
-    });
-
-    res.json({
-      success: true,
-      isPremium: true,
-      message: 'Pagamento processado com sucesso! Acesso PRO liberado.',
-      receipt
-    });
-  } catch (err) {
-    console.error('[Payment/Checkout] Erro:', err);
-    res.status(500).json({ error: 'Erro ao processar pagamento: ' + err.message });
-  }
-});
-
-// Cancelar / Resetar plano PRO (para testes)
-app.post('/api/payment/cancel', async (req, res) => {
-  try {
-    const { userId, username } = req.body;
-    await dbRun(`
-      UPDATE subscriptions 
-      SET is_premium = 0,
-          plan_name = 'Plano Gratuito',
-          payment_method = NULL,
-          amount = 0,
-          receipt_json = NULL,
-          updated_at = datetime('now', 'localtime')
-      WHERE id = 'sub_global'
+    const users = await dbAll(`
+      SELECT id, username, name, role, allowed_modules, registration_number, email, phone, created_at 
+      FROM users 
+      ORDER BY created_at ASC
     `);
-
-    await logAudit({
-      userId,
-      username,
-      action: 'PAYMENT_PRO_CANCELLED',
-      description: `Assinatura PRO foi cancelada ou revertida para modo gratuito.`,
-      ip: getClientIp(req)
-    });
-
-    res.json({ success: true, isPremium: false, message: 'Plano revertido para o modo gratuito.' });
+    res.json({ users });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Criar novo funcionário/técnico com permissões específicas (Admin)
+app.post('/api/users', async (req, res) => {
+  try {
+    const { username, password, name, role, allowedModules, registrationNumber, email, phone, createdBy, createdByName } = req.body;
+
+    if (!username || !password || !name) {
+      return res.status(400).json({ error: 'Usuário, senha e nome completo são obrigatórios.' });
+    }
+
+    const cleanUsername = username.trim();
+    const existing = await dbGet('SELECT * FROM users WHERE username = ? COLLATE BINARY', [cleanUsername]);
+    if (existing) {
+      return res.status(400).json({ error: `O nome de usuário '${cleanUsername}' já está cadastrado no sistema.` });
+    }
+
+    const userId = uid('usr');
+    const modulesStr = Array.isArray(allowedModules) ? allowedModules.join(',') : (allowedModules || 'riscos');
+
+    await dbRun(`
+      INSERT INTO users (id, username, password, name, role, allowed_modules, registration_number, email, phone)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      userId,
+      cleanUsername,
+      password,
+      name.trim(),
+      role || 'technician',
+      modulesStr,
+      registrationNumber ? registrationNumber.trim() : null,
+      email ? email.trim() : null,
+      phone ? phone.trim() : null
+    ]);
+
+    await logAudit({
+      userId: createdBy,
+      username: createdByName,
+      action: 'USER_CREATED',
+      description: `Novo funcionário cadastrado: '${name.trim()}' (@${cleanUsername}) com acesso aos módulos [${modulesStr}].`,
+      details: { newUserId: userId, username: cleanUsername, role: role || 'technician', allowedModules: modulesStr },
+      ip: getClientIp(req)
+    });
+
+    const newUser = await dbGet('SELECT id, username, name, role, allowed_modules, registration_number, email, phone, created_at FROM users WHERE id = ?', [userId]);
+
+    // Disparar sincronização automática com GitHub
+    syncWithGithub(`Novo funcionário cadastrado: @${cleanUsername}`).catch(() => {});
+
+    res.status(201).json({ success: true, message: 'Funcionário cadastrado com sucesso!', user: newUser });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao cadastrar funcionário: ' + err.message });
+  }
+});
+
+// Atualizar permissões e dados de um funcionário (Admin)
+app.put('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, role, allowedModules, password, registrationNumber, email, phone, updatedBy, updatedByName } = req.body;
+
+    const user = await dbGet('SELECT * FROM users WHERE id = ?', [id]);
+    if (!user) return res.status(404).json({ error: 'Funcionário não encontrado.' });
+
+    const modulesStr = Array.isArray(allowedModules) ? allowedModules.join(',') : (allowedModules || user.allowed_modules || 'riscos');
+    const newPassword = password && password.trim() ? password.trim() : user.password;
+    const newRole = role || user.role;
+    const newName = name && name.trim() ? name.trim() : user.name;
+
+    await dbRun(`
+      UPDATE users 
+      SET name = ?, role = ?, allowed_modules = ?, password = ?, registration_number = ?, email = ?, phone = ?
+      WHERE id = ?
+    `, [
+      newName,
+      newRole,
+      modulesStr,
+      newPassword,
+      registrationNumber || user.registration_number,
+      email || user.email,
+      phone || user.phone,
+      id
+    ]);
+
+    await logAudit({
+      userId: updatedBy,
+      username: updatedByName,
+      action: 'USER_PERMISSIONS_UPDATED',
+      description: `Permissões e cadastro de '${user.name}' (@${user.username}) atualizados. Módulos permitidos: [${modulesStr}].`,
+      details: { targetUserId: id, role: newRole, allowedModules: modulesStr },
+      ip: getClientIp(req)
+    });
+
+    const updated = await dbGet('SELECT id, username, name, role, allowed_modules, registration_number, email, phone, created_at FROM users WHERE id = ?', [id]);
+
+    syncWithGithub(`Permissões atualizadas para @${user.username}`).catch(() => {});
+
+    res.json({ success: true, message: 'Permissões do funcionário atualizadas com sucesso!', user: updated });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao atualizar funcionário: ' + err.message });
+  }
+});
+
+// Excluir funcionário (Admin)
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { deletedBy, deletedByName } = req.body;
+
+    const user = await dbGet('SELECT * FROM users WHERE id = ?', [id]);
+    if (!user) return res.status(404).json({ error: 'Funcionário não encontrado.' });
+
+    if (user.username === 'admin' || user.id === 'usr_admin_default') {
+      return res.status(400).json({ error: 'O usuário administrador principal não pode ser excluído.' });
+    }
+
+    await dbRun('DELETE FROM users WHERE id = ?', [id]);
+
+    await logAudit({
+      userId: deletedBy,
+      username: deletedByName,
+      action: 'USER_DELETED',
+      description: `Funcionário '${user.name}' (@${user.username}) removido do sistema pelo administrador.`,
+      details: { deletedUserId: id, username: user.username },
+      ip: getClientIp(req)
+    });
+
+    syncWithGithub(`Funcionário removido: @${user.username}`).catch(() => {});
+
+    res.json({ success: true, message: `Funcionário '${user.name}' excluído com sucesso.` });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao excluir funcionário: ' + err.message });
+  }
+});
+
+// =========================================================================
+// 9. SINCRONIZAÇÃO MANUAL E AUTOMÁTICA COM GITHUB
+// =========================================================================
+
+app.post('/api/git/sync', async (req, res) => {
+  try {
+    const { reason, username } = req.body;
+    const result = await syncWithGithub(reason || `Sincronização manual acionada por ${username || 'Admin'}`);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Compatibilidade de status de plano (100% Desbloqueado Empresarial)
+app.get('/api/payment/status', (req, res) => {
+  res.json({
+    isPremium: true,
+    enterpriseUnlocked: true,
+    subscription: {
+      planName: 'SST PRO Corporativo (Ilimitado)',
+      is_premium: 1
+    }
+  });
 });
 
 // Rota de fallback para SPA
@@ -1204,14 +1094,19 @@ app.get('*', (req, res) => {
 async function startServer() {
   try {
     await initDatabase();
+
+    // Ativar serviço de backup e push automático no GitHub
+    startGitAutoSync();
+
     app.listen(PORT, () => {
       console.log(`=======================================================`);
-      console.log(`🚀 SST PRO Server Ativo & Operacional`);
-      console.log(`🌐 Site Oficial: https://sstpro.com.br`);
+      console.log(`🚀 SST PRO Server Ativo & Operacional 24/7/365`);
+      console.log(`🌐 Site Oficial: https://sst-pro.onrender.com/`);
       console.log(`📍 Acesso Local: http://localhost:${PORT}`);
       console.log(`💾 Banco de Dados: SQLite local (data/sst_pro.sqlite)`);
-      console.log(`🔑 Login Inicial: admin | Senha: 1234`);
-      console.log(`📦 Status Almoxarifado: Baixa Automática de EPI Ativa`);
+      console.log(`🔑 Login Admin: admin | Senha: 1234`);
+      console.log(`👥 Controle de Acesso: Victor, Eric, Samuel e Admin Ativos`);
+      console.log(`🔄 Sincronização GitHub: Ativa e Automática`);
       console.log(`=======================================================`);
     });
   } catch (err) {

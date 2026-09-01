@@ -93,14 +93,15 @@ export async function initDatabase() {
   // Agendar backup periódico a cada 1 hora de funcionamento
   setInterval(backupDatabase, 1000 * 60 * 60);
 
-  // 1. Tabela de Usuários / Técnicos Responsáveis
+  // 1. Tabela de Usuários / Técnicos Responsáveis com Módulos Permitidos (RBAC)
   await dbRun(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       username TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL,
       name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'admin',
+      role TEXT NOT NULL DEFAULT 'technician',
+      allowed_modules TEXT DEFAULT 'riscos',
       registration_number TEXT,
       email TEXT,
       phone TEXT,
@@ -108,6 +109,13 @@ export async function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Migration de compatibilidade para garantir coluna allowed_modules
+  try {
+    await dbRun('ALTER TABLE users ADD COLUMN allowed_modules TEXT');
+  } catch (e) {
+    // Coluna já existe
+  }
 
   // 2. Tabela de Empresas Gerenciadas (Isoladas por Usuário)
   await dbRun(`
@@ -288,24 +296,37 @@ export async function initDatabase() {
     `, ['sub_global', 0, 'Plano Gratuito', 0, new Date().toISOString()]);
   }
 
-  // Inicializar Usuários Padrão (admin, Eric, Samuel, Victor)
+  // Inicializar Usuários Padrão com Permissões Específicas
   const defaultUsers = [
     {
       id: 'usr_admin_default',
       username: 'admin',
       password: '1234',
-      name: 'Técnico Responsável SST Principal',
+      name: 'Técnico Responsável SST Principal (Admin)',
       role: 'admin',
+      allowedModules: 'empresas,riscos,almoxarifado,solicitacoes,auditoria,usuarios',
       reg: 'MTE-SST-004521/SP',
       email: 'admin@sstpro.com.br',
       phone: '(11) 98765-4321'
     },
     {
+      id: 'usr_victor',
+      username: 'Victor',
+      password: '1234',
+      name: 'Victor - Gestão de Riscos & Empresas',
+      role: 'technician',
+      allowedModules: 'empresas,riscos,solicitacoes,auditoria',
+      reg: 'MTE-SST-004524/SP',
+      email: 'victor@sstpro.com.br',
+      phone: '(11) 98765-4324'
+    },
+    {
       id: 'usr_eric',
       username: 'Eric',
       password: '1234',
-      name: 'Eric - Técnico SST',
+      name: 'Eric - Almoxarifado & Baixas de EPI',
       role: 'technician',
+      allowedModules: 'almoxarifado,solicitacoes,auditoria',
       reg: 'MTE-SST-004522/SP',
       email: 'eric@sstpro.com.br',
       phone: '(11) 98765-4322'
@@ -314,21 +335,12 @@ export async function initDatabase() {
       id: 'usr_samuel',
       username: 'Samuel',
       password: '1234',
-      name: 'Samuel - Técnico SST',
+      name: 'Samuel - Inspeções & Análise de Riscos',
       role: 'technician',
+      allowedModules: 'riscos',
       reg: 'MTE-SST-004523/SP',
       email: 'samuel@sstpro.com.br',
       phone: '(11) 98765-4323'
-    },
-    {
-      id: 'usr_victor',
-      username: 'Victor',
-      password: '1234',
-      name: 'Victor - Técnico SST',
-      role: 'technician',
-      reg: 'MTE-SST-004524/SP',
-      email: 'victor@sstpro.com.br',
-      phone: '(11) 98765-4324'
     }
   ];
 
@@ -336,14 +348,21 @@ export async function initDatabase() {
     const existing = await dbGet('SELECT * FROM users WHERE username = ? COLLATE BINARY', [u.username]);
     if (!existing) {
       await dbRun(`
-        INSERT INTO users (id, username, password, name, role, registration_number, email, phone)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `, [u.id, u.username, u.password, u.name, u.role, u.reg, u.email, u.phone]);
-      console.log(`[Database] Usuário criado: ${u.username} / ${u.password}`);
+        INSERT INTO users (id, username, password, name, role, allowed_modules, registration_number, email, phone)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [u.id, u.username, u.password, u.name, u.role, u.allowedModules, u.reg, u.email, u.phone]);
+      console.log(`[Database] Usuário criado: ${u.username} (Módulos: ${u.allowedModules})`);
+    } else {
+      // Atualizar módulos e papéis definidos
+      await dbRun(`
+        UPDATE users 
+        SET allowed_modules = ?, role = ?, name = ?
+        WHERE username = ? COLLATE BINARY
+      `, [u.allowedModules, u.role, u.name, u.username]);
     }
   }
 
-  console.log('[Database] Todas as tabelas e índices verificados e prontos.');
+  console.log('[Database] Todas as tabelas, permissões e índices verificados e prontos.');
 }
 
 export default db;

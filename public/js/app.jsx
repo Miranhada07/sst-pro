@@ -242,15 +242,45 @@ function App() {
   const analisesAtivas = empresaAtiva ? analisesRiscos.filter(a => a.empresa_id === empresaAtiva.id) : [];
 
   const contagemPendentes = solicitacoes.filter(s => s.status === 'aberta').length;
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const TABS = [
-    { id: "empresas", label: "Empresas", icon: "business", isFree: true },
-    { id: "reconhecimento", label: "Análise de Riscos", icon: "security", isFree: false },
-    { id: "almoxarifado", label: "Almoxarifado & Estoque", icon: "inventory_2", isFree: false },
-    { id: "solicitacoes", label: "Solicitações & Baixas", icon: "assignment_turned_in", isFree: true, badge: contagemPendentes },
-    { id: "auditoria", label: "Auditoria em Tempo Real", icon: "history_toggle_off", isFree: true },
-    { id: "pagamento", label: "Assinatura PRO", icon: "workspace_premium", isFree: true, highlight: !isPremium },
+  // Módulos mestres do sistema SST PRO
+  const ALL_SYSTEM_TABS = [
+    { id: "empresas", label: "Empresas", icon: "apartment", module: "empresas" },
+    { id: "reconhecimento", label: "Análise de Riscos", icon: "security", module: "riscos" },
+    { id: "almoxarifado", label: "Almoxarifado & Estoque", icon: "inventory_2", module: "almoxarifado" },
+    { id: "solicitacoes", label: "Solicitações & Baixas", icon: "assignment_turned_in", module: "solicitacoes" },
+    { id: "auditoria", label: "Auditoria em Tempo Real", icon: "history_toggle_off", module: "auditoria" },
+    { id: "usuarios", label: "Gestão de Equipe", icon: "group", module: "usuarios" },
   ];
+
+  // RBAC: Calcular quais módulos o usuário logado tem permissão de acessar
+  const allowedModulesList = React.useMemo(() => {
+    if (!currentUser) return [];
+    if (currentUser.role === 'admin' || currentUser.username === 'admin') {
+      return ['empresas', 'riscos', 'almoxarifado', 'solicitacoes', 'auditoria', 'usuarios'];
+    }
+    const raw = currentUser.allowed_modules || 'riscos';
+    return raw.split(',').map(s => s.trim().toLowerCase());
+  }, [currentUser]);
+
+  // Filtrar abas visíveis estritamente conforme as permissões do usuário
+  const TABS = React.useMemo(() => {
+    return ALL_SYSTEM_TABS.filter(t => {
+      if (t.module === 'riscos') return allowedModulesList.includes('riscos') || allowedModulesList.includes('reconhecimento');
+      return allowedModulesList.includes(t.module);
+    }).map(t => ({
+      ...t,
+      badge: t.id === 'solicitacoes' ? contagemPendentes : 0
+    }));
+  }, [allowedModulesList, contagemPendentes]);
+
+  // Redirecionamento automático: se a aba ativa não for permitida, abrir a primeira permitida
+  useEffect(() => {
+    if (TABS.length > 0 && !TABS.some(t => t.id === tab)) {
+      setTab(TABS[0].id);
+    }
+  }, [TABS, tab]);
 
   // Logout Totalmente Independente
   const handleLogout = async () => {
@@ -315,27 +345,43 @@ function App() {
 
   return (
     <React.Fragment>
-      {/* BARRA LATERAL (Sidebar) */}
-      <div className="sidebar">
+      {/* Backdrop para Menu Mobile */}
+      {mobileMenuOpen && (
+        <div className="mobile-drawer-backdrop" onClick={() => setMobileMenuOpen(false)} />
+      )}
+
+      {/* BARRA LATERAL (Sidebar / Drawer Mobile) */}
+      <div className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-header">
           <div className="sidebar-brand-icon">
             <Icon name="health_and_safety" style={{ fontSize: '24px' }} />
           </div>
-          <div>
+          <div style={{ flex: 1 }}>
             <h1 style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.3px' }}>SST PRO</h1>
-            <a href="https://sstpro.com.br" target="_blank" rel="noopener noreferrer" style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600, textDecoration: 'none' }}>
-              https://sstpro.com.br
+            <a href="https://sst-pro.onrender.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600, textDecoration: 'none' }}>
+              sst-pro.onrender.com
             </a>
           </div>
+          {mobileMenuOpen && (
+            <button
+              onClick={() => setMobileMenuOpen(false)}
+              style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '4px' }}
+            >
+              <Icon name="close" style={{ fontSize: '22px' }} />
+            </button>
+          )}
         </div>
 
         <div className="sidebar-nav">
-          <div className="nav-section-title">Menu Principal</div>
+          <div className="nav-section-title">Menu de Acesso ({TABS.length} Módulos)</div>
           {TABS.map((t) => (
             <button
               key={t.id}
               className={`nav-btn ${tab === t.id ? 'active' : ''}`}
-              onClick={() => setTab(t.id)}
+              onClick={() => {
+                setTab(t.id);
+                setMobileMenuOpen(false);
+              }}
             >
               <Icon name={t.icon} style={{ fontSize: '20px' }} />
               <span style={{ flex: 1 }}>{t.label}</span>
@@ -344,10 +390,6 @@ function App() {
                 <span className="nav-counter alert" title={`${t.badge} solicitações pendentes`}>
                   {t.badge}
                 </span>
-              )}
-
-              {!t.isFree && !isPremium && (
-                <Icon name="lock" style={{ fontSize: '15px', color: '#94a3b8' }} />
               )}
             </button>
           ))}
@@ -363,8 +405,8 @@ function App() {
               <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {currentUser.name}
               </div>
-              <div style={{ fontSize: '11px', color: '#64748b' }}>
-                {currentUser.registration_number || 'Técnico Responsável'}
+              <div style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600 }}>
+                {currentUser.role === 'admin' ? 'Administrador' : (currentUser.registration_number || 'Técnico SST')}
               </div>
             </div>
             <button
@@ -387,16 +429,25 @@ function App() {
 
       {/* ÁREA PRINCIPAL (Main Area) */}
       <div className="main-area">
-        {/* TOPBAR */}
+        {/* TOPBAR RESPONSIVA */}
         <div className="topbar">
           <div className="topbar-left">
-            {empresas.length > 0 && !["empresas", "pagamento", "auditoria"].includes(tab) ? (
+            {/* Botão Hambúrguer Mobile */}
+            <button
+              className="mobile-hamburger-btn"
+              onClick={() => setMobileMenuOpen(true)}
+              title="Abrir Menu"
+            >
+              <Icon name="menu" style={{ fontSize: '24px' }} />
+            </button>
+
+            {empresas.length > 0 && !["empresas", "auditoria", "usuarios"].includes(tab) ? (
               <div className="company-selector-box">
                 <Icon name="domain" style={{ color: '#2563eb', fontSize: '18px' }} />
-                <span style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>Empresa em Foco:</span>
+                <span className="hide-mobile" style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>Empresa:</span>
                 <select
                   className="select"
-                  style={{ margin: 0, padding: '4px 8px', width: '280px', background: '#fff', border: '1px solid #cbd5e1' }}
+                  style={{ margin: 0, padding: '4px 8px', maxWidth: '280px', background: '#fff', border: '1px solid #cbd5e1' }}
                   value={empresaAtivaId || ""}
                   onChange={(e) => setEmpresaAtivaId(e.target.value)}
                 >
@@ -411,30 +462,16 @@ function App() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span className="live-pulse"></span>
                 <span style={{ color: '#64748b', fontSize: '13px', fontWeight: 500 }}>
-                  Banco SQLite Local Conectado • {empresas.length} Empresas
+                  SST PRO • {currentUser.name} ({currentUser.role === 'admin' ? 'Acesso Total' : `${TABS.length} Módulos`})
                 </span>
               </div>
             )}
           </div>
 
           <div className="topbar-right">
-            {/* Badge de Plano */}
-            <div 
-              className={`badge ${isPremium ? 'badge-pro' : 'badge-free'}`}
-              style={{ cursor: 'pointer' }}
-              onClick={() => setTab("pagamento")}
-            >
-              {isPremium ? (
-                <React.Fragment>
-                  <Icon name="workspace_premium" style={{ fontSize: '16px', color: '#fbbf24' }} />
-                  <span>PLANO PRO ATIVO</span>
-                </React.Fragment>
-              ) : (
-                <React.Fragment>
-                  <Icon name="lock" style={{ fontSize: '14px' }} />
-                  <span>Plano Gratuito • Upgrade</span>
-                </React.Fragment>
-              )}
+            <div className="badge badge-pro" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Icon name="verified_user" style={{ fontSize: '15px', color: '#10b981' }} />
+              <span>SISTEMA ATIVO & CONECTADO</span>
             </div>
           </div>
         </div>
@@ -442,92 +479,85 @@ function App() {
         {/* CONTEÚDO DA ABA SELECIONADA */}
         <div className="content-wrapper">
           <div className="container">
-            {/* Se aba for restrita e não for PRO */}
-            {!TABS.find((t) => t.id === tab)?.isFree && !isPremium ? (
-              <div className="lock-overlay">
-                <div style={{ width: '70px', height: '70px', borderRadius: '50%', background: '#fee2e2', color: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px auto' }}>
-                  <Icon name="lock" style={{ fontSize: '36px' }} />
-                </div>
-                <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginBottom: '10px' }}>Recurso Exclusivo do Plano PRO</h2>
-                <p style={{ color: '#64748b', marginBottom: '28px', fontSize: '15px', lineHeight: '1.6', maxWidth: '500px', margin: '0 auto 28px auto' }}>
-                  A gestão de almoxarifado completo com baixa automática de estoque, aprovação de EPIs com termo assinado e relatórios fotográficos de campo exigem a assinatura PRO.
-                </p>
-                <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
-                  <button className="btn btn-primary" style={{ width: 'auto', padding: '12px 28px' }} onClick={() => setTab("pagamento")}>
-                    <Icon name="workspace_premium" /> Conhecer Planos e Assinar
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <React.Fragment>
-                {tab === "empresas" && (
-                  <TabEmpresas
-                    empresas={empresas}
-                    currentUser={currentUser}
-                    geoCoords={geoCoords}
-                    onRefresh={loadAllData}
-                    setEmpresaAtivaId={setEmpresaAtivaId}
-                    showToast={showToast}
-                  />
-                )}
+            <React.Fragment>
+              {tab === "empresas" && (
+                <TabEmpresas
+                  empresas={empresas}
+                  currentUser={currentUser}
+                  geoCoords={geoCoords}
+                  onRefresh={loadAllData}
+                  setEmpresaAtivaId={setEmpresaAtivaId}
+                  showToast={showToast}
+                />
+              )}
 
-                {tab === "reconhecimento" && (
-                  <TabReconhecimento
-                    empresaAtiva={empresaAtiva}
-                    analises={analisesAtivas}
-                    currentUser={currentUser}
-                    geoCoords={geoCoords}
-                    onRefresh={loadAllData}
-                    showToast={showToast}
-                  />
-                )}
+              {tab === "reconhecimento" && (
+                <TabReconhecimento
+                  empresaAtiva={empresaAtiva}
+                  analises={analisesAtivas}
+                  currentUser={currentUser}
+                  geoCoords={geoCoords}
+                  onRefresh={loadAllData}
+                  showToast={showToast}
+                />
+              )}
 
-                {tab === "almoxarifado" && (
-                  <TabAlmoxarifado
-                    empresaAtiva={empresaAtiva}
-                    materiais={materiaisAtivos}
-                    currentUser={currentUser}
-                    geoCoords={geoCoords}
-                    onRefresh={loadAllData}
-                    showToast={showToast}
-                  />
-                )}
+              {tab === "almoxarifado" && (
+                <TabAlmoxarifado
+                  empresaAtiva={empresaAtiva}
+                  materiais={materiaisAtivos}
+                  currentUser={currentUser}
+                  geoCoords={geoCoords}
+                  onRefresh={loadAllData}
+                  showToast={showToast}
+                />
+              )}
 
-                {tab === "solicitacoes" && (
-                  <TabSolicitacoes
-                    empresaAtiva={empresaAtiva}
-                    materiaisAtivos={materiaisAtivos}
-                    solicitacoes={solicitacoesAtivas}
-                    isPremium={isPremium}
-                    currentUser={currentUser}
-                    geoCoords={geoCoords}
-                    onRefresh={loadAllData}
-                    onOpenTermo={(req) => setTermoModalData(req)}
-                    showToast={showToast}
-                  />
-                )}
+              {tab === "solicitacoes" && (
+                <TabSolicitacoes
+                  empresaAtiva={empresaAtiva}
+                  materiaisAtivos={materiaisAtivos}
+                  solicitacoes={solicitacoesAtivas}
+                  isPremium={true}
+                  currentUser={currentUser}
+                  geoCoords={geoCoords}
+                  onRefresh={loadAllData}
+                  onOpenTermo={(req) => setTermoModalData(req)}
+                  showToast={showToast}
+                />
+              )}
 
-                {tab === "auditoria" && (
-                  <TabAuditoria
-                    auditLogs={auditLogs}
-                    onRefresh={loadAllData}
-                  />
-                )}
+              {tab === "auditoria" && (
+                <TabAuditoria
+                  auditLogs={auditLogs}
+                  onRefresh={loadAllData}
+                />
+              )}
 
-                {tab === "pagamento" && (
-                  <TabPagamento
-                    isPremium={isPremium}
-                    subscriptionInfo={subscriptionInfo}
-                    currentUser={currentUser}
-                    geoCoords={geoCoords}
-                    onRefresh={loadAllData}
-                    onOpenReceipt={(rec) => setReciboPagamentoData(rec)}
-                    showToast={showToast}
-                  />
-                )}
-              </React.Fragment>
-            )}
+              {tab === "usuarios" && (
+                <TabUsuarios
+                  currentUser={currentUser}
+                  onRefresh={loadAllData}
+                  showToast={showToast}
+                />
+              )}
+            </React.Fragment>
           </div>
+        </div>
+
+        {/* BARRA DE NAVEGAÇÃO RÁPIDA MOBILE (Bottom Bar para Celular) */}
+        <div className="mobile-bottom-nav">
+          {TABS.slice(0, 5).map((t) => (
+            <button
+              key={t.id}
+              className={`mobile-nav-btn ${tab === t.id ? 'active' : ''}`}
+              onClick={() => setTab(t.id)}
+            >
+              <Icon name={t.icon} style={{ fontSize: '22px' }} />
+              <span>{t.label.split(' ')[0]}</span>
+              {t.badge > 0 && <span className="mobile-badge">{t.badge}</span>}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -537,14 +567,6 @@ function App() {
           request={termoModalData}
           empresaAtiva={empresaAtiva}
           onClose={() => setTermoModalData(null)}
-        />
-      )}
-
-      {/* MODAL: COMPROVANTE DE PAGAMENTO PRO */}
-      {reciboPagamentoData && (
-        <ReciboPagamentoModal
-          receipt={reciboPagamentoData}
-          onClose={() => setReciboPagamentoData(null)}
         />
       )}
 
@@ -2108,146 +2130,332 @@ function TabAuditoria({ auditLogs, onRefresh }) {
 }
 
 // =========================================================================
-// ABA 6: ASSINATURA PRO COM CHECKOUT MULTI-MÉTODOS (PIX, CARTÃO, BOLETO)
+// ABA 6: GESTÃO DE EQUIPE, FUNCIONÁRIOS E PERMISSÕES GRANULARES (RBAC)
 // =========================================================================
-function TabPagamento({ isPremium, subscriptionInfo, currentUser, geoCoords, onRefresh, onOpenReceipt, showToast }) {
-  const [selectedMethod, setSelectedMethod] = useState("pix");
+function TabUsuarios({ currentUser, onRefresh, showToast }) {
+  const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [modalUser, setModalUser] = useState(null); // null = fechado, objeto = edição/novo
+  const [syncingGit, setSyncingGit] = useState(false);
 
-  // Estados dos formulários de pagamento
-  // 1. Cartão de Crédito / Débito
-  const [cardNumber, setCardNumber] = useState("4532 •••• •••• 8890");
-  const [cardHolder, setCardHolder] = useState(currentUser?.name || "TÉCNICO RESPONSÁVEL SST");
-  const [cardExpiry, setCardExpiry] = useState("12/28");
-  const [cardCvv, setCardCvv] = useState("890");
+  const MODULOS_DISPONIVEIS = [
+    { id: "empresas", label: "Empresas", icon: "apartment", desc: "Gestão de Empresas Clientes e Contratos", color: "#2563eb", bg: "#eff6ff" },
+    { id: "riscos", label: "Análise de Riscos", icon: "security", desc: "Inspeções de Campo e Evidências Fotográficas", color: "#dc2626", bg: "#fef2f2" },
+    { id: "almoxarifado", label: "Almoxarifado", icon: "inventory_2", desc: "Controle de Estoque e Cadastro de EPIs", color: "#d97706", bg: "#fffbeb" },
+    { id: "solicitacoes", label: "Solicitações & Baixas", icon: "assignment_turned_in", desc: "Aprovação de Pedidos e Baixa de Estoque", color: "#16a34a", bg: "#f0fdf4" },
+    { id: "auditoria", label: "Auditoria em Tempo Real", icon: "history_toggle_off", desc: "Rastreamento Completo de Eventos e Ações", color: "#9333ea", bg: "#faf5ff" }
+  ];
 
-  // 2. PIX Oficial com QR Code Real
-  const [pixData, setPixData] = useState({
-    pixCode: "00020126430014br.gov.bcb.pix0121contato@sstpro.com.br5204000053039865406149.905802BR5916SST PRO SISTEMAS6009SAO PAULO62130509SSTPRO1496304E8A2",
-    qrCodeDataUrl: "",
-    merchantName: "SST PRO SISTEMAS",
-    merchantCity: "SAO PAULO",
-    pixKey: "contato@sstpro.com.br",
-    amount: 149.90
-  });
-  const [copiedPix, setCopiedPix] = useState(false);
-  const [isEditingPix, setIsEditingPix] = useState(false);
-  const [editPixKey, setEditPixKey] = useState("contato@sstpro.com.br");
-  const [editKeyType, setEditKeyType] = useState("email");
-  const [editMerchantName, setEditMerchantName] = useState("SST PRO SISTEMAS");
-  const [editMerchantCity, setEditMerchantCity] = useState("SAO PAULO");
-  const [savingPix, setSavingPix] = useState(false);
-
-  // Carregar dados reais do PIX
-  const loadPixData = async () => {
+  const carregarUsuarios = async () => {
+    setLoading(true);
     try {
-      const res = await fetch('/api/pix/data');
-      if (res.ok) {
-        const data = await res.json();
-        setPixData(data);
-        if (data.config) {
-          setEditPixKey(data.config.pix_key || "contato@sstpro.com.br");
-          setEditKeyType(data.config.key_type || "email");
-          setEditMerchantName(data.config.merchant_name || "SST PRO SISTEMAS");
-          setEditMerchantCity(data.config.merchant_city || "SAO PAULO");
-        }
-      }
+      const res = await fetch('/api/users');
+      const data = await res.json();
+      if (data.users) setUsers(data.users);
     } catch (err) {
-      console.error("Erro ao carregar dados do PIX:", err);
+      showToast("Erro ao carregar equipe: " + err.message, "error");
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadPixData();
+    carregarUsuarios();
   }, []);
 
-  const handleSalvarChavePix = async (e) => {
-    if (e) e.preventDefault();
-    if (!editPixKey.trim()) return showToast("Informe uma chave PIX válida.", "error");
-
-    setSavingPix(true);
+  const handleSyncGit = async () => {
+    setSyncingGit(true);
     try {
-      const res = await fetch('/api/pix/settings', {
+      const res = await fetch('/api/git/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pixKey: editPixKey.trim(),
-          keyType: editKeyType,
-          merchantName: editMerchantName.trim(),
-          merchantCity: editMerchantCity.trim(),
-          amount: 149.90,
-          txId: 'SSTPRO149',
-          userId: currentUser?.id,
+          reason: 'Sincronização manual acionada pelo Administrador',
           username: currentUser?.name
         })
       });
-
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-
-      setPixData((prev) => ({
-        ...prev,
-        pixCode: data.pixCode,
-        qrCodeDataUrl: data.qrCodeDataUrl,
-        merchantName: data.config.merchant_name,
-        merchantCity: data.config.merchant_city,
-        pixKey: data.config.pix_key
-      }));
-
-      setIsEditingPix(false);
-      showToast("Chave PIX atualizada! O QR Code oficial e o código Copia e Cola foram recalculados.", "success");
+      if (data.success) {
+        showToast("🚀 Banco de dados e logs sincronizados com o GitHub com sucesso!", "success");
+      } else {
+        showToast("Aviso na sincronização: " + (data.message || data.error), "info");
+      }
     } catch (err) {
-      showToast(err.message, "error");
+      showToast("Erro ao sincronizar com GitHub: " + err.message, "error");
     } finally {
-      setSavingPix(false);
+      setSyncingGit(false);
     }
   };
 
-  // 3. Boleto
-  const linhaDigitavel = "34191.79001 01043.510047 91020.150008 5 98450000014900";
-
-  const handleCopyPix = () => {
-    navigator.clipboard.writeText(pixData.pixCode);
-    setCopiedPix(true);
-    showToast("Código PIX Copia e Cola copiado com sucesso!", "success");
-    setTimeout(() => setCopiedPix(false), 3000);
-  };
-
-  const handleProcessarPagamento = async (methodOverride) => {
-    const method = methodOverride || selectedMethod;
-    setLoading(true);
+  const handleExcluirUsuario = async (u) => {
+    if (u.username === 'admin' || u.id === 'usr_admin_default') {
+      return showToast("O administrador principal não pode ser excluído.", "warning");
+    }
+    if (!confirm(`Tem certeza que deseja remover o funcionário ${u.name} (@${u.username})?`)) return;
 
     try {
-      const res = await fetch('/api/payment/checkout', {
-        method: 'POST',
+      const res = await fetch(`/api/users/${u.id}`, {
+        method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          paymentMethod: method,
-          amount: 149.90,
-          paymentDetails: {
-            cardNumberLast4: cardNumber.slice(-4),
-            cardHolder,
-            modalidade: 'renovacao_mensal_recorrente'
-          },
-          userId: currentUser?.id,
-          username: currentUser?.name,
-          latitude: geoCoords.lat,
-          longitude: geoCoords.lng,
-          locationText: geoCoords.text
+          deletedBy: currentUser?.id,
+          deletedByName: currentUser?.name
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      showToast(data.message || "Funcionário removido com sucesso.", "info");
+      carregarUsuarios();
+      onRefresh();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+
+  return (
+    <div>
+      {/* Top Header da Gestão de Equipe */}
+      <div className="card" style={{ marginBottom: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ width: '48px', height: '48px', borderRadius: '14px', background: '#eff6ff', color: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="group" style={{ fontSize: '28px' }} />
+            </div>
+            <div>
+              <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>Gestão de Equipe & Permissões</h2>
+              <p style={{ fontSize: '13px', color: '#64748b' }}>
+                Defina exatamente quais módulos cada funcionário pode acessar dentro do SST PRO
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn btn-outline"
+              style={{ width: 'auto', padding: '10px 16px', borderColor: '#3b82f6', color: '#2563eb' }}
+              onClick={handleSyncGit}
+              disabled={syncingGit}
+            >
+              <Icon name="cloud_sync" />
+              {syncingGit ? "Sincronizando..." : "Sincronizar com GitHub"}
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ width: 'auto', padding: '10px 20px' }}
+              onClick={() => setModalUser({ isNew: true, allowed_modules: 'riscos', role: 'technician' })}
+            >
+              <Icon name="person_add" /> Cadastrar Novo Funcionário
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Grid de Cards dos Funcionários */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '20px' }}>
+        {users.map((u) => {
+          const modulosArray = (u.allowed_modules || 'riscos').split(',').map(m => m.trim().toLowerCase());
+          const isAdmin = u.role === 'admin' || u.username === 'admin';
+
+          return (
+            <div key={u.id} className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', border: isAdmin ? '2px solid #93c5fd' : '1px solid #e2e8f0' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div style={{
+                      width: '46px',
+                      height: '46px',
+                      borderRadius: '50%',
+                      background: isAdmin ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : '#f1f5f9',
+                      color: isAdmin ? '#fff' : '#0f172a',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 800,
+                      fontSize: '18px',
+                      boxShadow: isAdmin ? '0 4px 10px rgba(37, 99, 235, 0.3)' : 'none'
+                    }}>
+                      {u.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>{u.name}</div>
+                      <div style={{ fontSize: '12px', color: '#2563eb', fontWeight: 600 }}>@{u.username}</div>
+                    </div>
+                  </div>
+
+                  <span className={`badge ${isAdmin ? 'badge-pro' : 'badge-free'}`}>
+                    {isAdmin ? 'ADMINISTRADOR' : 'TÉCNICO SST'}
+                  </span>
+                </div>
+
+                <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '14px', lineHeight: '1.6' }}>
+                  <div><strong>Registro MTE:</strong> {u.registration_number || 'Não informado'}</div>
+                  <div><strong>E-mail:</strong> {u.email || 'Não informado'}</div>
+                  <div><strong>Telefone:</strong> {u.phone || 'Não informado'}</div>
+                </div>
+
+                <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px', marginBottom: '14px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', color: '#475569', marginBottom: '8px' }}>
+                    Módulos Liberados:
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {MODULOS_DISPONIVEIS.map(m => {
+                      const hasModule = isAdmin || modulosArray.includes(m.id);
+                      if (!hasModule) return null;
+                      return (
+                        <span
+                          key={m.id}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '4px 8px',
+                            borderRadius: '6px',
+                            background: m.bg,
+                            color: m.color,
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            border: `1px solid ${m.bg}`
+                          }}
+                        >
+                          <Icon name={m.icon} style={{ fontSize: '14px' }} />
+                          {m.label}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}
+                  onClick={() => setModalUser(u)}
+                >
+                  <Icon name="tune" style={{ fontSize: '16px' }} /> Permissões & Dados
+                </button>
+
+                {!isAdmin && (
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    style={{ width: 'auto', padding: '6px 10px', fontSize: '12px', borderColor: '#fca5a5', color: '#ef4444' }}
+                    onClick={() => handleExcluirUsuario(u)}
+                    title="Excluir funcionário"
+                  >
+                    <Icon name="delete" style={{ fontSize: '16px' }} />
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Modal de Criação / Edição de Funcionário */}
+      {modalUser && (
+        <UsuarioModal
+          user={modalUser}
+          modulosDisponiveis={MODULOS_DISPONIVEIS}
+          currentUser={currentUser}
+          onClose={() => setModalUser(null)}
+          onSuccess={() => {
+            setModalUser(null);
+            carregarUsuarios();
+            onRefresh();
+          }}
+          showToast={showToast}
+        />
+      )}
+    </div>
+  );
+}
+
+// Modal de Formulário de Funcionário & Permissões
+function UsuarioModal({ user, modulosDisponiveis, currentUser, onClose, onSuccess, showToast }) {
+  const isNew = Boolean(user.isNew);
+  const [name, setName] = useState(user.name || "");
+  const [username, setUsername] = useState(user.username || "");
+  const [password, setPassword] = useState(user.password || (isNew ? "1234" : ""));
+  const [role, setRole] = useState(user.role || "technician");
+  const [reg, setReg] = useState(user.registration_number || "");
+  const [email, setEmail] = useState(user.email || "");
+  const [phone, setPhone] = useState(user.phone || "");
+  const [modulos, setModulos] = useState(
+    user.allowed_modules ? user.allowed_modules.split(',').map(m => m.trim().toLowerCase()) : ['riscos']
+  );
+  const [loading, setLoading] = useState(false);
+
+  const toggleModulo = (modId) => {
+    if (modulos.includes(modId)) {
+      if (modulos.length > 1) {
+        setModulos(modulos.filter(m => m !== modId));
+      } else {
+        showToast("O usuário deve ter acesso a pelo menos 1 módulo.", "warning");
+      }
+    } else {
+      setModulos([...modulos, modId]);
+    }
+  };
+
+  const aplicarPreset = (presetKey) => {
+    if (presetKey === 'victor') {
+      setModulos(['empresas', 'riscos', 'solicitacoes', 'auditoria']);
+      setRole('technician');
+    } else if (presetKey === 'eric') {
+      setModulos(['almoxarifado', 'solicitacoes', 'auditoria']);
+      setRole('technician');
+    } else if (presetKey === 'samuel') {
+      setModulos(['riscos']);
+      setRole('technician');
+    } else if (presetKey === 'admin') {
+      setModulos(['empresas', 'riscos', 'almoxarifado', 'solicitacoes', 'auditoria', 'usuarios']);
+      setRole('admin');
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    if (e) e.preventDefault();
+    if (!name.trim() || !username.trim()) {
+      return showToast("Nome e usuário (@login) são obrigatórios.", "error");
+    }
+    if (isNew && !password.trim()) {
+      return showToast("Defina uma senha inicial para o usuário.", "error");
+    }
+
+    setLoading(true);
+    try {
+      const url = isNew ? '/api/users' : `/api/users/${user.id}`;
+      const method = isNew ? 'POST' : 'PUT';
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: name.trim(),
+          username: username.trim(),
+          password: password.trim(),
+          role,
+          allowedModules: modulos.join(','),
+          registrationNumber: reg.trim(),
+          email: email.trim(),
+          phone: phone.trim(),
+          createdBy: currentUser?.id,
+          createdByName: currentUser?.name,
+          updatedBy: currentUser?.id,
+          updatedByName: currentUser?.name
         })
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      // Efeito sonoro / Confetti de Celebração PRO
-      if (window.confetti) {
-        window.confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
-      }
-
-      showToast("🎉 Pagamento APROVADO com sucesso! Todas as funcionalidades PRO foram liberadas no banco SQLite local.", "success");
-      onRefresh();
-      onOpenReceipt(data.receipt);
+      showToast(data.message || "Funcionário salvo com sucesso!", "success");
+      onSuccess();
     } catch (err) {
       showToast(err.message, "error");
     } finally {
@@ -2255,411 +2463,19 @@ function TabPagamento({ isPremium, subscriptionInfo, currentUser, geoCoords, onR
     }
   };
 
-  const handleCancelarPro = async () => {
-    if (!confirm("Deseja simular o cancelamento da assinatura PRO para testar o bloqueio de telas?")) return;
-    try {
-      const res = await fetch('/api/payment/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser?.id, username: currentUser?.name })
-      });
-      if (!res.ok) throw new Error("Erro ao cancelar.");
-      showToast("Plano PRO revertido para o modo gratuito.", "info");
-      onRefresh();
-    } catch (err) {
-      showToast(err.message, "error");
-    }
-  };
-
-  return (
-    <div style={{ maxWidth: '850px', margin: '0 auto' }}>
-      <div className="card" style={{ borderColor: isPremium ? '#10b981' : '#2563eb', borderWidth: '2px', padding: '36px' }}>
-
-        {/* Cabeçalho do Plano */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Icon name="workspace_premium" style={{ fontSize: '28px', color: '#2563eb' }} />
-              <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>Assinatura SST PRO - Desktop</h2>
-            </div>
-            <p style={{ color: '#64748b', fontSize: '14px', marginTop: '4px' }}>
-              Liberação completa de Almoxarifado, Baixa Automática de Estoque, Relatórios Fotográficos e Termos de Entrega.
-            </p>
-          </div>
-
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '36px', fontWeight: 800, color: '#0f172a' }}>
-              R$ 149,90 <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 400 }}>/mês</span>
-            </div>
-            <span className={`badge ${isPremium ? 'badge-success' : 'badge-free'}`}>
-              {isPremium ? '⭐ ASSINATURA ATIVA' : 'PLANO GRATUITO'}
-            </span>
-          </div>
-        </div>
-
-        {/* Lista de Vantagens */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', background: '#f8fafc', padding: '20px', borderRadius: '12px', marginBottom: '28px', border: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#334155' }}>
-            <Icon name="check_circle" style={{ color: '#10b981' }} />
-            <span><b>Baixa Automática</b> no Estoque de EPI</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#334155' }}>
-            <Icon name="check_circle" style={{ color: '#10b981' }} />
-            <span><b>Almoxarifado Completo</b> com CA e Saldo</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#334155' }}>
-            <Icon name="check_circle" style={{ color: '#10b981' }} />
-            <span>Inspeções de Risco com <b>Upload de Fotos</b></span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#334155' }}>
-            <Icon name="check_circle" style={{ color: '#10b981' }} />
-            <span><b>Termos de Entrega de EPI</b> Digitais e Impressos</span>
-          </div>
-        </div>
-
-        {/* Se já for PRO */}
-        {isPremium ? (
-          <div style={{ textAlign: 'center', padding: '20px', background: '#ecfdf5', borderRadius: '12px', border: '1px solid #a7f3d0' }}>
-            <Icon name="verified" style={{ fontSize: '48px', color: '#10b981', marginBottom: '8px' }} />
-            <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#065f46' }}>Você possui acesso PRO Total!</h3>
-            <p style={{ fontSize: '13px', color: '#047857', marginTop: '4px' }}>
-              Todas as telas e recursos avançados estão disponíveis no seu computador.
-            </p>
-
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '20px' }}>
-              {subscriptionInfo?.receipt && (
-                <button className="btn btn-outline" style={{ width: 'auto', borderColor: '#059669', color: '#059669' }} onClick={() => onOpenReceipt(subscriptionInfo.receipt)}>
-                  <Icon name="receipt_long" /> Ver Comprovante de Pagamento
-                </button>
-              )}
-              <button className="btn btn-danger" style={{ width: 'auto' }} onClick={handleCancelarPro}>
-                Simular Cancelamento de Teste
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#0f172a' }}>
-                Selecione o Meio de Pagamento para Liberação Imediata:
-              </h3>
-            </div>
-
-            {/* Seletor de Meio de Pagamento */}
-            <div className="payment-methods-grid">
-              <div className={`payment-method-card ${selectedMethod === 'pix' ? 'selected' : ''}`} onClick={() => setSelectedMethod('pix')}>
-                <Icon name="qr_code_2" style={{ fontSize: '28px', color: '#0284c7' }} />
-                <div style={{ fontWeight: 700, fontSize: '13px', marginTop: '6px' }}>PIX Instantâneo</div>
-                <span style={{ fontSize: '11px', color: '#16a34a' }}>QR Code Oficial BACEN</span>
-              </div>
-
-              <div className={`payment-method-card ${selectedMethod === 'credit_card' ? 'selected' : ''}`} onClick={() => setSelectedMethod('credit_card')}>
-                <Icon name="credit_card" style={{ fontSize: '28px', color: '#2563eb' }} />
-                <div style={{ fontWeight: 700, fontSize: '13px', marginTop: '6px' }}>Cartão de Crédito</div>
-                <span style={{ fontSize: '11px', color: '#16a34a' }}>Renovação Mensal</span>
-              </div>
-
-              <div className={`payment-method-card ${selectedMethod === 'debit_card' ? 'selected' : ''}`} onClick={() => setSelectedMethod('debit_card')}>
-                <Icon name="account_balance_wallet" style={{ fontSize: '28px', color: '#059669' }} />
-                <div style={{ fontWeight: 700, fontSize: '13px', marginTop: '6px' }}>Cartão de Débito</div>
-                <span style={{ fontSize: '11px', color: '#64748b' }}>Débito em conta</span>
-              </div>
-
-              <div className={`payment-method-card ${selectedMethod === 'boleto' ? 'selected' : ''}`} onClick={() => setSelectedMethod('boleto')}>
-                <Icon name="receipt" style={{ fontSize: '28px', color: '#475569' }} />
-                <div style={{ fontWeight: 700, fontSize: '13px', marginTop: '6px' }}>Boleto Bancário</div>
-                <span style={{ fontSize: '11px', color: '#64748b' }}>Compensação rápida</span>
-              </div>
-            </div>
-
-            {/* 1. FLUXO PIX REAL */}
-            {selectedMethod === 'pix' && (
-              <div className="pix-qr-container">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <h4 style={{ fontSize: '16px', fontWeight: 700, color: '#0f172a' }}>
-                    Pagamento via PIX Real (Padrão BACEN BR Code)
-                  </h4>
-                  <button 
-                    className="btn btn-outline" 
-                    style={{ padding: '6px 12px', fontSize: '12px', width: 'auto' }}
-                    onClick={() => setIsEditingPix(!isEditingPix)}
-                  >
-                    <Icon name="settings" style={{ fontSize: '14px' }} />
-                    {isEditingPix ? "Fechar Configuração" : "Configurar Minha Chave PIX"}
-                  </button>
-                </div>
-
-                {/* Painel de Configuração da Chave PIX */}
-                {isEditingPix && (
-                  <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '12px', padding: '16px', margin: '12px 0 20px 0', textAlign: 'left' }}>
-                    <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Icon name="vpn_key" style={{ color: '#2563eb', fontSize: '18px' }} />
-                      Configurar Chave PIX de Recebimento
-                    </div>
-                    <form onSubmit={handleSalvarChavePix}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '10px', marginBottom: '10px' }}>
-                        <div>
-                          <label className="label" style={{ fontSize: '12px' }}>Tipo de Chave</label>
-                          <select className="select" style={{ padding: '8px' }} value={editKeyType} onChange={(e) => setEditKeyType(e.target.value)}>
-                            <option value="cpf">CPF</option>
-                            <option value="cnpj">CNPJ</option>
-                            <option value="email">E-mail</option>
-                            <option value="telefone">Celular / Telefone</option>
-                            <option value="aleatoria">Chave Aleatória (EVP)</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="label" style={{ fontSize: '12px' }}>Chave PIX *</label>
-                          <input
-                            className="input"
-                            style={{ padding: '8px' }}
-                            value={editPixKey}
-                            onChange={(e) => setEditPixKey(e.target.value)}
-                            placeholder="Insira seu CPF, CNPJ, E-mail ou Chave Aleatória"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '10px', marginBottom: '12px' }}>
-                        <div>
-                          <label className="label" style={{ fontSize: '12px' }}>Nome do Beneficiário (Titular)</label>
-                          <input
-                            className="input"
-                            style={{ padding: '8px' }}
-                            value={editMerchantName}
-                            onChange={(e) => setEditMerchantName(e.target.value)}
-                            placeholder="Nome Completo ou Razão Social"
-                          />
-                        </div>
-                        <div>
-                          <label className="label" style={{ fontSize: '12px' }}>Cidade</label>
-                          <input
-                            className="input"
-                            style={{ padding: '8px' }}
-                            value={editMerchantCity}
-                            onChange={(e) => setEditMerchantCity(e.target.value)}
-                            placeholder="Ex: SAO PAULO"
-                          />
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                        <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '6px 14px' }} onClick={() => setIsEditingPix(false)}>
-                          Cancelar
-                        </button>
-                        <button type="submit" className="btn btn-primary" style={{ width: 'auto', padding: '6px 18px' }} disabled={savingPix}>
-                          <Icon name="check" /> {savingPix ? "Atualizando..." : "Salvar e Gerar Novo QR Code"}
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                )}
-
-                <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '16px' }}>
-                  Abra o aplicativo de qualquer banco (Nubank, Itaú, Bradesco, Inter, Mercado Pago, etc.) e escaneie o QR Code oficial abaixo ou copie o código Copia e Cola:
-                </p>
-
-                {/* Detalhes do Beneficiário */}
-                <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', fontSize: '12px', color: '#475569', background: '#f1f5f9', padding: '8px 16px', borderRadius: '8px', marginBottom: '16px' }}>
-                  <span>Beneficiário: <strong>{pixData.merchantName}</strong></span>
-                  <span>Valor: <strong>R$ 149,90</strong></span>
-                  <span>Cidade: <strong>{pixData.merchantCity}</strong></span>
-                </div>
-
-                {/* QR Code REAL PNG Gerado em Alta Resolução */}
-                <div style={{ background: '#fff', padding: '16px', display: 'inline-block', border: '1px solid #cbd5e1', borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.06)' }}>
-                  {pixData.qrCodeDataUrl ? (
-                    <img 
-                      src={pixData.qrCodeDataUrl} 
-                      alt="QR Code PIX Oficial BACEN" 
-                      style={{ width: '220px', height: '220px', display: 'block', margin: '0 auto' }} 
-                    />
-                  ) : (
-                    <div style={{ width: '220px', height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <Icon name="sync" style={{ animation: 'spin 1s linear infinite', fontSize: '32px', color: '#2563eb' }} />
-                    </div>
-                  )}
-                </div>
-
-                <div className="pix-code-box" style={{ wordBreak: 'break-all', fontSize: '12px', fontFamily: 'monospace' }}>
-                  {pixData.pixCode}
-                </div>
-
-                <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-                  <button className="btn btn-outline" style={{ width: 'auto' }} onClick={handleCopyPix}>
-                    <Icon name={copiedPix ? "check" : "content_copy"} />
-                    {copiedPix ? "Chave Copiada!" : "Copiar Código Pix"}
-                  </button>
-
-                  <button className="btn btn-success" style={{ width: 'auto', padding: '12px 28px' }} onClick={() => handleProcessarPagamento('pix')} disabled={loading}>
-                    <Icon name="bolt" /> Simular Pagamento Confirmado (PIX)
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* 2. FLUXO CARTÃO DE CRÉDITO OU DÉBITO */}
-            {(selectedMethod === 'credit_card' || selectedMethod === 'debit_card') && (
-              <div>
-                {/* Visual do Cartão */}
-                <div className="credit-card-preview">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                    <Icon name="credit_card" style={{ fontSize: '32px' }} />
-                    <span style={{ fontSize: '16px', fontWeight: 800, letterSpacing: '1px' }}>
-                      {selectedMethod === 'credit_card' ? 'CRÉDITO' : 'DÉBITO'} PRO
-                    </span>
-                  </div>
-
-                  <div style={{ fontSize: '20px', letterSpacing: '3px', fontFamily: 'monospace', marginBottom: '20px' }}>
-                    {cardNumber || '•••• •••• •••• ••••'}
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                    <div>
-                      <div style={{ fontSize: '10px', textTransform: 'uppercase', color: '#94a3b8' }}>Titular</div>
-                      <div style={{ fontSize: '13px', fontWeight: 600 }}>{cardHolder || 'NOME DO TITULAR'}</div>
-                    </div>
-
-                    <div>
-                      <div style={{ fontSize: '10px', textTransform: 'uppercase', color: '#94a3b8' }}>Validade</div>
-                      <div style={{ fontSize: '13px', fontWeight: 600 }}>{cardExpiry || 'MM/AA'}</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Formulário do Cartão */}
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label className="label">Número do Cartão</label>
-                    <input
-                      className="input"
-                      value={cardNumber}
-                      onChange={(e) => setCardNumber(e.target.value)}
-                      placeholder="4532 0000 0000 0000"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="label">CVV / Cód. Segurança</label>
-                    <input
-                      className="input"
-                      value={cardCvv}
-                      onChange={(e) => setCardCvv(e.target.value)}
-                      placeholder="123"
-                      maxLength="4"
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label className="label">Nome Impresso no Cartão</label>
-                    <input
-                      className="input"
-                      value={cardHolder}
-                      onChange={(e) => setCardHolder(e.target.value)}
-                      placeholder="Nome do titular"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="label">Validade</label>
-                    <input
-                      className="input"
-                      value={cardExpiry}
-                      onChange={(e) => setCardExpiry(e.target.value)}
-                      placeholder="MM/AA"
-                    />
-                  </div>
-                </div>
-
-                <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', padding: '12px 16px', borderRadius: '10px', margin: '8px 0 16px 0', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <Icon name="autorenew" style={{ color: '#2563eb', fontSize: '22px' }} />
-                  <div style={{ fontSize: '13px', color: '#1e40af' }}>
-                    <strong>Modalidade: Assinatura Mensal Recorrente</strong><br />
-                    Valor único de <strong>R$ 149,90/mês</strong> debitado mensalmente no cartão (sem parcelamento).
-                  </div>
-                </div>
-
-                <button
-                  className="btn btn-primary"
-                  style={{ padding: '14px', fontSize: '15px' }}
-                  onClick={() => handleProcessarPagamento(selectedMethod)}
-                  disabled={loading}
-                >
-                  <Icon name="lock" /> Confirmar Pagamento no Cartão (R$ 149,00)
-                </button>
-              </div>
-            )}
-
-            {/* 3. FLUXO BOLETO BANCÁRIO */}
-            {selectedMethod === 'boleto' && (
-              <div style={{ background: '#f8fafc', padding: '24px', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: '#0f172a', marginBottom: '8px' }}>
-                  Boleto Bancário Registrado
-                </h4>
-                <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '16px' }}>
-                  Utilize o código de barras ou a linha digitável para pagar no seu internet banking:
-                </p>
-
-                <div className="barcode-stripes"></div>
-
-                <div className="pix-code-box">
-                  {linhaDigitavel}
-                </div>
-
-                <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-                  <button
-                    className="btn btn-outline"
-                    style={{ width: 'auto' }}
-                    onClick={() => {
-                      navigator.clipboard.writeText(linhaDigitavel);
-                      showToast("Linha digitável copiada!", "success");
-                    }}
-                  >
-                    <Icon name="content_copy" /> Copiar Linha Digitável
-                  </button>
-
-                  <button
-                    className="btn btn-primary"
-                    style={{ width: 'auto', padding: '12px 28px' }}
-                    onClick={() => handleProcessarPagamento('boleto')}
-                    disabled={loading}
-                  >
-                    <Icon name="check_circle" /> Simular Pagamento do Boleto
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// =========================================================================
-// MODAL: TERMO OFICIAL DE ENTREGA E BAIXA DE EPI (NR-06)
-// =========================================================================
-function TermoEntregaModal({ request, empresaAtiva, onClose }) {
-  if (!request) return null;
-
-  const handlePrint = () => {
-    window.print();
-  };
-
-  const nomeEmpresa = request.empresa_nome || empresaAtiva?.name || 'Empresa Contratante';
-
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #e2e8f0', paddingBottom: '16px', marginBottom: '20px' }}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e2e8f0', paddingBottom: '16px', marginBottom: '20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Icon name="assignment_turned_in" style={{ fontSize: '28px', color: '#10b981' }} />
+            <Icon name="person" style={{ fontSize: '28px', color: '#2563eb' }} />
             <div>
-              <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>Termo de Entrega e Responsabilidade de EPI</h3>
-              <span style={{ fontSize: '12px', color: '#64748b' }}>Conformidade com a Norma Regulamentadora NR-06 do MTE</span>
+              <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>
+                {isNew ? 'Cadastrar Novo Funcionário' : `Editar: ${user.name}`}
+              </h3>
+              <span style={{ fontSize: '12px', color: '#64748b' }}>
+                Controle de Acessos & Módulos do Sistema
+              </span>
             </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}>
@@ -2667,98 +2483,111 @@ function TermoEntregaModal({ request, empresaAtiva, onClose }) {
           </button>
         </div>
 
-        <div style={{ background: '#f8fafc', padding: '18px', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '20px', fontSize: '13px', lineHeight: '1.6', color: '#334155' }}>
-          <p style={{ marginBottom: '10px' }}>
-            Declaro ter recebido da empresa o Equipamento de Proteção Individual (EPI) abaixo discriminado, em perfeito estado de conservação e funcionamento, com o respectivo Certificado de Aprovação (CA) válido, comprometendo-me a utilizá-lo estritamente para a finalidade a que se destina.
-          </p>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', background: '#fff', padding: '14px', borderRadius: '8px', border: '1px solid #e2e8f0', margin: '14px 0' }}>
-            <div><strong>Colaborador:</strong> {request.colaborador}</div>
-            <div><strong>Função:</strong> {request.funcao_colaborador || 'Colaborador'}</div>
-            <div><strong>Empresa:</strong> {nomeEmpresa}</div>
-            <div><strong>Data da Entrega:</strong> {formatDate(request.data_aprovacao || request.data_solicitacao)}</div>
-          </div>
-
-          <div style={{ background: '#eff6ff', padding: '14px', borderRadius: '8px', border: '1px solid #bfdbfe' }}>
-            <div style={{ fontSize: '14px', fontWeight: 700, color: '#1e40af' }}>
-              Material Entregue: {request.quantidade}x {request.material_nome}
+        <form onSubmit={handleSubmit}>
+          {/* Atalhos Rápidos / Presets */}
+          <div style={{ marginBottom: '16px', background: '#f8fafc', padding: '12px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', color: '#475569', display: 'block', marginBottom: '8px' }}>
+              ⚡ Modelos Rápidos de Permissão:
+            </span>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '4px 10px', fontSize: '11px' }} onClick={() => aplicarPreset('victor')}>
+                Perfil Victor (Empresas/Riscos/Solicitações/Auditoria)
+              </button>
+              <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '4px 10px', fontSize: '11px' }} onClick={() => aplicarPreset('eric')}>
+                Perfil Eric (Almoxarifado/Solicitações/Auditoria)
+              </button>
+              <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '4px 10px', fontSize: '11px' }} onClick={() => aplicarPreset('samuel')}>
+                Perfil Campo (Apenas Riscos)
+              </button>
+              <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '4px 10px', fontSize: '11px', borderColor: '#3b82f6', color: '#2563eb' }} onClick={() => aplicarPreset('admin')}>
+                Acesso Total Admin
+              </button>
             </div>
-            <div style={{ fontSize: '12px', color: '#2563eb', marginTop: '4px' }}>
-              Certificado de Aprovação: <b>{request.ca_number || 'Conforme Fabricante'}</b> | Motivo: {request.motivo}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '12px', marginBottom: '12px' }}>
+            <div>
+              <label className="label">Nome Completo *</label>
+              <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex: Roberto Silva" required />
+            </div>
+            <div>
+              <label className="label">Usuário de Acesso (@login) *</label>
+              <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Ex: Roberto" required disabled={!isNew && user.username === 'admin'} />
             </div>
           </div>
 
-          <div style={{ marginTop: '16px', fontSize: '12px', color: '#64748b' }}>
-            <strong>Técnico Responsável pela Liberação:</strong> {request.aprovado_por_nome || 'Técnico SST Responsável'}<br />
-            <strong>Registro Profissional:</strong> {request.aprovado_por_registro || 'MTE-SST-004521/SP'}
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-          <button className="btn btn-outline" style={{ width: 'auto' }} onClick={onClose}>
-            Fechar
-          </button>
-          <button className="btn btn-primary" style={{ width: 'auto' }} onClick={handlePrint}>
-            <Icon name="print" /> Imprimir Termo de Entrega
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// =========================================================================
-// MODAL: COMPROVANTE DE PAGAMENTO PRO
-// =========================================================================
-function ReciboPagamentoModal({ receipt, onClose }) {
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-          <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: '#ecfdf5', color: '#10b981', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px auto' }}>
-            <Icon name="check_circle" style={{ fontSize: '36px' }} />
-          </div>
-          <h3 style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>Comprovante Oficial de Assinatura SST PRO</h3>
-          <span style={{ fontSize: '12px', color: '#64748b' }}>Transação Aprovada e Salva no Banco Local SQLite</span>
-        </div>
-
-        <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '12px', border: '1px solid #e2e8f0', fontSize: '13px', lineHeight: '1.8', color: '#334155', marginBottom: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px', marginBottom: '8px' }}>
-            <span>Identificador da Transação:</span>
-            <strong>{receipt.transactionId}</strong>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+            <div>
+              <label className="label">{isNew ? 'Senha Inicial *' : 'Nova Senha (opcional)'}</label>
+              <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={isNew ? "1234" : "Deixe em branco para manter"} />
+            </div>
+            <div>
+              <label className="label">Papel / Nível no Sistema</label>
+              <select className="select" value={role} onChange={(e) => setRole(e.target.value)}>
+                <option value="technician">Técnico SST Operacional</option>
+                <option value="admin">Administrador Geral</option>
+              </select>
+            </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px', marginBottom: '8px' }}>
-            <span>Plano Contratado:</span>
-            <strong>{receipt.planName}</strong>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+            <div>
+              <label className="label">Registro Profissional MTE</label>
+              <input className="input" value={reg} onChange={(e) => setReg(e.target.value)} placeholder="Ex: MTE-SST-004521/SP" />
+            </div>
+            <div>
+              <label className="label">Telefone / Celular</label>
+              <input className="input" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(11) 98765-4321" />
+            </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px', marginBottom: '8px' }}>
-            <span>Forma de Pagamento:</span>
-            <strong style={{ textTransform: 'uppercase' }}>{receipt.paymentMethod}</strong>
+          {/* Matriz de Módulos e Permissões */}
+          <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px', marginBottom: '20px' }}>
+            <label className="label" style={{ marginBottom: '10px' }}>
+              🛡️ Módulos e Abas Permitidas para este Funcionário:
+            </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {modulosDisponiveis.map((m) => {
+                const isSelected = modulos.includes(m.id);
+                return (
+                  <div
+                    key={m.id}
+                    onClick={() => toggleModulo(m.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '10px 14px',
+                      borderRadius: '10px',
+                      border: isSelected ? `2px solid ${m.color}` : '1px solid #e2e8f0',
+                      background: isSelected ? m.bg : '#ffffff',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <Icon name={m.icon} style={{ fontSize: '22px', color: isSelected ? m.color : '#94a3b8' }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: isSelected ? '#0f172a' : '#64748b' }}>
+                        {m.label}
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#64748b' }}>{m.desc}</div>
+                    </div>
+                    <Icon name={isSelected ? "check_box" : "check_box_outline_blank"} style={{ color: isSelected ? m.color : '#cbd5e1', fontSize: '22px' }} />
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px', marginBottom: '8px' }}>
-            <span>Valor Pago:</span>
-            <strong style={{ color: '#16a34a', fontSize: '16px' }}>{formatCurrency(receipt.amount)}</strong>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+            <button type="button" className="btn btn-outline" style={{ width: 'auto' }} onClick={onClose}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn btn-primary" style={{ width: 'auto', padding: '12px 24px' }} disabled={loading}>
+              <Icon name="save" /> {loading ? "Salvando..." : (isNew ? "Criar Funcionário" : "Salvar Permissões")}
+            </button>
           </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px', marginBottom: '8px' }}>
-            <span>Data e Hora:</span>
-            <span>{receipt.issuedAt}</span>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span>Código de Autenticação:</span>
-            <code style={{ fontSize: '11px', background: '#e2e8f0', padding: '2px 6px', borderRadius: '4px' }}>{receipt.authCode}</code>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
-          <button className="btn btn-primary" style={{ width: 'auto', padding: '12px 32px' }} onClick={onClose}>
-            Entendido, Continuar no Sistema
-          </button>
-        </div>
+        </form>
       </div>
     </div>
   );
