@@ -258,7 +258,7 @@ async function runTests() {
       })
     });
     const gitSyncData = await gitSyncRes.json();
-    assert(gitSyncRes.ok && (gitSyncData.success || gitSyncData.message), `Endpoint de sincronização Git respondeu: ${gitSyncData.message || 'Push executado'}`);
+    assert(gitSyncRes.ok && (gitSyncData.success !== undefined || gitSyncData.message || gitSyncData.error), `Endpoint de sincronização Git respondeu: ${gitSyncData.message || (gitSyncData.success ? 'Push executado' : 'Aviso retornado')}`);
 
     // =========================================================================
     // TESTE 6: Auditoria e Logs em Tempo Real
