@@ -1,4 +1,6 @@
 // Test Suite End-to-End para SST PRO Enterprise (RBAC & Multi-Usuário)
+import { dbGet, dbAll } from './server/database.js';
+
 const API_BASE = 'http://localhost:3000/api';
 
 async function runTests() {
