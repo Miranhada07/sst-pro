@@ -75,9 +75,8 @@ export async function syncWithGithub(reason = 'Alterações automáticas e audit
     // 1. Configurar autor inline via -c para garantir que nenhum ambiente falhe (Render, Docker, Local)
     // 2. Adicionar arquivos modificados
     // 3. Criar commit apenas se houver alterações no index/working tree
-    // 4. Puxar alterações remotas com rebase e fazer push seguro para a branch main
     const gitAuthorFlags = `-c user.name="${GIT_AUTHOR_NAME}" -c user.email="${GIT_AUTHOR_EMAIL}"`;
-    const cmd = `git ${gitAuthorFlags} config user.name "${GIT_AUTHOR_NAME}" && git ${gitAuthorFlags} config user.email "${GIT_AUTHOR_EMAIL}" && git add -A && (git diff-index --quiet HEAD || git ${gitAuthorFlags} commit -m "${commitMsg}") && (git pull ${targetRepo} main --rebase || true) && git push ${targetRepo} HEAD:main`;
+    const cmd = `git ${gitAuthorFlags} config user.name "${GIT_AUTHOR_NAME}" && git ${gitAuthorFlags} config user.email "${GIT_AUTHOR_EMAIL}" && git add -A && (git diff-index --quiet HEAD || git ${gitAuthorFlags} commit -m "${commitMsg}") && git push ${targetRepo} HEAD:main`;
 
     exec(cmd, { cwd: REPO_ROOT, timeout: 45000 }, (error, stdout, stderr) => {
       isSyncing = false;
