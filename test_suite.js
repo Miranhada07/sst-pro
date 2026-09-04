@@ -125,7 +125,6 @@ async function runTests() {
     assert(!verifyWrongRes.ok && verifyWrongData.error?.includes('Código incorreto'), 'Validação com código de 6 dígitos inválido bloqueada com segurança');
 
     // 2.4 Recuperar Código Ativo do Banco e Validar Acesso
-    const { dbGet } = await import('./server/database.js');
     const activeOtp = await dbGet('SELECT * FROM verification_codes WHERE user_id = ? AND used = 0 ORDER BY created_at DESC LIMIT 1', [testUserId]);
     assert(activeOtp && activeOtp.code?.length === 6, `Código de 6 dígitos gerado e persistido com sucesso: [${activeOtp?.code}]`);
 
