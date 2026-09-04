@@ -103,17 +103,49 @@ async function runTests() {
     assert(novoFuncRes.ok && novoFuncData.user && novoFuncData.user.id, `Novo funcionário cadastrado pelo admin: ${novoFuncData.user?.name} (@${novoFuncData.user?.username})`);
     const testUserId = novoFuncData.user?.id;
 
-    // 2.2 Login com o Novo Funcionário Criado
-    const loginRoberto = await fetch(`${API_BASE}/auth/login`, {
+    // 2.2 Login Inicial com o Novo Funcionário (Requer Código de Verificação 2FA por E-mail)
+    const loginRobertoInit = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: 'roberto', password: '123' })
     });
-    const dataRoberto = await loginRoberto.json();
-    assert(loginRoberto.ok && dataRoberto.user?.name === 'Roberto Vasconcelos', 'Novo funcionário realizou login com as credenciais criadas');
-    assert(dataRoberto.user?.allowed_modules === 'empresas,riscos', 'Módulos atribuídos ao novo funcionário foram carregados com sucesso');
+    const dataRobertoInit = await loginRobertoInit.json();
+    assert(loginRobertoInit.ok && dataRobertoInit.require2FA === true && dataRobertoInit.userId === testUserId, 'Login do novo funcionário solicita código de verificação 2FA por e-mail');
+    assert(dataRobertoInit.emailMasked.includes('@'), `E-mail mascarado com sucesso para proteção: ${dataRobertoInit.emailMasked}`);
 
-    // 2.3 Atualizar Permissões do Funcionário
+    // 2.3 Testar Validação com Código Incorreto (Deve Falhar)
+    const verifyWrongRes = await fetch(`${API_BASE}/auth/verify-code`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: testUserId, code: '000000' })
+    });
+    const verifyWrongData = await verifyWrongRes.json();
+    assert(!verifyWrongRes.ok && verifyWrongData.error?.includes('Código incorreto'), 'Validação com código de 6 dígitos inválido bloqueada com segurança');
+
+    // 2.4 Recuperar Código Ativo do Banco e Validar Acesso
+    const { dbGet } = await import('./server/database.js');
+    const activeOtp = await dbGet('SELECT * FROM verification_codes WHERE user_id = ? AND used = 0 ORDER BY created_at DESC LIMIT 1', [testUserId]);
+    assert(activeOtp && activeOtp.code?.length === 6, `Código de 6 dígitos gerado e persistido com sucesso: [${activeOtp?.code}]`);
+
+    const verifyCorrectRes = await fetch(`${API_BASE}/auth/verify-code`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: testUserId, code: activeOtp.code })
+    });
+    const verifyCorrectData = await verifyCorrectRes.json();
+    assert(verifyCorrectRes.ok && verifyCorrectData.user?.name === 'Roberto Vasconcelos', 'Código de verificação validado com sucesso e acesso liberado');
+    assert(verifyCorrectData.user?.is_verified === 1, 'Status de verificação do funcionário atualizado para verificado (is_verified = 1)');
+
+    // 2.5 Próximo Login Direto para Usuário Já Verificado
+    const loginRobertoVerified = await fetch(`${API_BASE}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'roberto', password: '123' })
+    });
+    const dataRobertoVerified = await loginRobertoVerified.json();
+    assert(loginRobertoVerified.ok && !dataRobertoVerified.require2FA && dataRobertoVerified.user?.name === 'Roberto Vasconcelos', 'Próximo login de usuário verificado realizado diretamente sem necessidade de novo 2FA');
+
+    // 2.6 Atualizar Permissões do Funcionário
     const updateFuncRes = await fetch(`${API_BASE}/users/${testUserId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -127,12 +159,12 @@ async function runTests() {
     const updateFuncData = await updateFuncRes.json();
     assert(updateFuncRes.ok && updateFuncData.user?.allowed_modules === 'empresas,riscos,solicitacoes', 'Permissões do funcionário atualizadas pelo Administrador');
 
-    // 2.4 Listar Todos os Usuários
+    // 2.7 Listar Todos os Usuários
     const listUsersRes = await fetch(`${API_BASE}/users`);
     const listUsersData = await listUsersRes.json();
     assert(listUsersRes.ok && Array.isArray(listUsersData.users) && listUsersData.users.length >= 5, `Listagem de equipe retornou ${listUsersData.users.length} colaboradores`);
 
-    // 2.5 Excluir o Funcionário de Teste
+    // 2.8 Excluir o Funcionário de Teste
     const deleteFuncRes = await fetch(`${API_BASE}/users/${testUserId}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },

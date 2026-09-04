@@ -110,9 +110,21 @@ export async function initDatabase() {
     )
   `);
 
-  // Migration de compatibilidade para garantir coluna allowed_modules
+  // Migration de compatibilidade para garantir coluna allowed_modules, is_verified e email_verified_at
   try {
     await dbRun('ALTER TABLE users ADD COLUMN allowed_modules TEXT');
+  } catch (e) {
+    // Coluna já existe
+  }
+
+  try {
+    await dbRun('ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 0');
+  } catch (e) {
+    // Coluna já existe
+  }
+
+  try {
+    await dbRun('ALTER TABLE users ADD COLUMN email_verified_at DATETIME');
   } catch (e) {
     // Coluna já existe
   }
@@ -270,6 +282,21 @@ export async function initDatabase() {
     )
   `);
 
+  // 10. Tabela de Códigos de Verificação por E-mail (2FA / Confirmação de Cadastro)
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS verification_codes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      code TEXT NOT NULL,
+      expires_at DATETIME NOT NULL,
+      attempts INTEGER DEFAULT 0,
+      used INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
   // Inicializar Chave PIX Padrão se não existir
   const pixConfig = await dbGet('SELECT * FROM pix_settings WHERE id = ?', ['global_pix']);
   if (!pixConfig) {
@@ -348,15 +375,15 @@ export async function initDatabase() {
     const existing = await dbGet('SELECT * FROM users WHERE username = ? COLLATE BINARY', [u.username]);
     if (!existing) {
       await dbRun(`
-        INSERT INTO users (id, username, password, name, role, allowed_modules, registration_number, email, phone)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO users (id, username, password, name, role, allowed_modules, registration_number, email, phone, is_verified)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       `, [u.id, u.username, u.password, u.name, u.role, u.allowedModules, u.reg, u.email, u.phone]);
       console.log(`[Database] Usuário criado: ${u.username} (Módulos: ${u.allowedModules})`);
     } else {
-      // Atualizar módulos e papéis definidos
+      // Atualizar módulos, papéis definidos e garantir verificação dos padrões
       await dbRun(`
         UPDATE users 
-        SET allowed_modules = ?, role = ?, name = ?
+        SET allowed_modules = ?, role = ?, name = ?, is_verified = 1
         WHERE username = ? COLLATE BINARY
       `, [u.allowedModules, u.role, u.name, u.username]);
     }

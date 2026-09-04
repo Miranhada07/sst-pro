@@ -592,15 +592,34 @@ function App() {
 }
 
 // =========================================================================
-// TELA DE LOGIN PRIVADA E INDEPENDENTE PARA CADA TÉCNICO
+// TELA DE LOGIN COM VERIFICAÇÃO EM DUAS ETAPAS (2FA / CÓDIGO POR E-MAIL)
 // =========================================================================
 function LoginScreen({ onLoginSuccess, geoCoords, showToast }) {
+  const [step, setStep] = useState("credentials"); // "credentials" | "2fa"
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
+  // Estados do 2FA / Código de Verificação
+  const [twoFactorData, setTwoFactorData] = useState(null); // { userId, username, name, emailMasked }
+  const [verificationCode, setVerificationCode] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resending, setResending] = useState(false);
+
+  // Timer para contagem regressiva do reenvio de código
+  useEffect(() => {
+    let timer;
+    if (resendCooldown > 0) {
+      timer = setInterval(() => {
+        setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
+
+  // 1. Envio das Credenciais Iniciais
   const handleLogin = async (e) => {
     if (e) e.preventDefault();
     if (!username.trim() || !password.trim()) {
@@ -629,6 +648,62 @@ function LoginScreen({ onLoginSuccess, geoCoords, showToast }) {
         throw new Error(data.error || 'Falha ao autenticar.');
       }
 
+      // Se o usuário precisa de validação de código de 6 dígitos enviado por e-mail
+      if (data.require2FA) {
+        setTwoFactorData({
+          userId: data.userId,
+          username: data.username,
+          name: data.name,
+          emailMasked: data.emailMasked
+        });
+        setStep("2fa");
+        setVerificationCode("");
+        setResendCooldown(30);
+        showToast(`Código de 6 dígitos enviado para ${data.emailMasked}`, 'info');
+      } else {
+        // Usuário liberado diretamente
+        onLoginSuccess(data.user, data.savedSession);
+      }
+    } catch (err) {
+      setErrorMsg(err.message);
+      showToast(err.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 2. Validação do Código de 6 Dígitos
+  const handleVerifyCode = async (e) => {
+    if (e) e.preventDefault();
+    const cleanCode = verificationCode.trim().replace(/\D/g, '');
+
+    if (cleanCode.length !== 6) {
+      setErrorMsg("Digite o código de 6 dígitos recebido por e-mail.");
+      return;
+    }
+
+    setLoading(true);
+    setErrorMsg("");
+
+    try {
+      const res = await fetch('/api/auth/verify-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: twoFactorData.userId,
+          code: cleanCode,
+          latitude: geoCoords.lat,
+          longitude: geoCoords.lng,
+          locationText: geoCoords.text
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Código incorreto ou expirado.');
+      }
+
+      showToast("🚀 Identidade verificada com sucesso! Bem-vindo ao SST PRO.", "success");
       onLoginSuccess(data.user, data.savedSession);
     } catch (err) {
       setErrorMsg(err.message);
@@ -638,77 +713,208 @@ function LoginScreen({ onLoginSuccess, geoCoords, showToast }) {
     }
   };
 
+  // 3. Reenviar Código por E-mail
+  const handleResendCode = async () => {
+    if (resendCooldown > 0 || resending) return;
+
+    setResending(true);
+    setErrorMsg("");
+
+    try {
+      const res = await fetch('/api/auth/resend-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: twoFactorData.userId })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Erro ao reenviar código.');
+      }
+
+      setResendCooldown(30);
+      showToast(data.message || "Novo código de verificação enviado!", "success");
+    } catch (err) {
+      setErrorMsg(err.message);
+      showToast(err.message, "error");
+    } finally {
+      setResending(false);
+    }
+  };
+
+  // Voltar para a tela de credenciais
+  const handleBackToCredentials = () => {
+    setStep("credentials");
+    setVerificationCode("");
+    setErrorMsg("");
+  };
+
   return (
     <div className="login-container">
       <div className="login-card">
-        <div className="login-header">
-          <div className="login-icon-badge">
-            <Icon name="health_and_safety" style={{ fontSize: '36px' }} />
-          </div>
-          <h1 className="login-title">SST PRO</h1>
-          <a href="https://sstpro.com.br" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb', fontSize: '13px', fontWeight: 600, textDecoration: 'none', display: 'block', marginBottom: '4px' }}>
-            https://sstpro.com.br
-          </a>
-          <p className="login-subtitle">Acesso Restrito ao Técnico de Segurança do Trabalho</p>
-        </div>
+        {step === "credentials" ? (
+          <React.Fragment>
+            <div className="login-header">
+              <div className="login-icon-badge">
+                <Icon name="health_and_safety" style={{ fontSize: '36px' }} />
+              </div>
+              <h1 className="login-title">SST PRO</h1>
+              <a href="https://sstpro.com.br" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb', fontSize: '13px', fontWeight: 600, textDecoration: 'none', display: 'block', marginBottom: '4px' }}>
+                https://sstpro.com.br
+              </a>
+              <p className="login-subtitle">Acesso Restrito ao Técnico de Segurança do Trabalho</p>
+            </div>
 
-        {errorMsg && (
-          <div style={{ background: '#fee2e2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Icon name="error" style={{ fontSize: '18px' }} />
-            <span>{errorMsg}</span>
-          </div>
-        )}
-
-        <form onSubmit={handleLogin}>
-          <label className="label">Usuário / Identificação</label>
-          <div style={{ position: 'relative' }}>
-            <input
-              className="input"
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Digite o usuário (ex: admin)"
-              autoFocus
-              required
-            />
-          </div>
-
-          <label className="label">Senha de Acesso</label>
-          <div style={{ position: 'relative' }}>
-            <input
-              className="input"
-              type={showPassword ? "text" : "password"}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Digite a senha (ex: 1234)"
-              required
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              style={{ position: 'absolute', right: '12px', top: '12px', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
-            >
-              <Icon name={showPassword ? "visibility_off" : "visibility"} style={{ fontSize: '20px' }} />
-            </button>
-          </div>
-
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={loading}
-            style={{ padding: '14px', fontSize: '15px', marginTop: '8px' }}
-          >
-            {loading ? (
-              <React.Fragment>
-                <Icon name="sync" style={{ animation: 'spin 1s linear infinite' }} /> Validando Acesso...
-              </React.Fragment>
-            ) : (
-              <React.Fragment>
-                <Icon name="login" /> Entrar no Sistema
-              </React.Fragment>
+            {errorMsg && (
+              <div style={{ background: '#fee2e2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Icon name="error" style={{ fontSize: '18px' }} />
+                <span>{errorMsg}</span>
+              </div>
             )}
-          </button>
-        </form>
+
+            <form onSubmit={handleLogin}>
+              <label className="label">Usuário / Identificação</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  className="input"
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Digite o usuário (ex: admin, Victor, Eric...)"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <label className="label">Senha de Acesso</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  className="input"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Digite sua senha"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={{ position: 'absolute', right: '12px', top: '12px', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+                >
+                  <Icon name={showPassword ? "visibility_off" : "visibility"} style={{ fontSize: '20px' }} />
+                </button>
+              </div>
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={loading}
+                style={{ padding: '14px', fontSize: '15px', marginTop: '8px', width: '100%' }}
+              >
+                {loading ? (
+                  <React.Fragment>
+                    <Icon name="sync" style={{ animation: 'spin 1s linear infinite' }} /> Validando Acesso...
+                  </React.Fragment>
+                ) : (
+                  <React.Fragment>
+                    <Icon name="login" /> Entrar no Sistema
+                  </React.Fragment>
+                )}
+              </button>
+            </form>
+          </React.Fragment>
+        ) : (
+          /* ETAPA 2: DIGITAÇÃO DO CÓDIGO DE VERIFICAÇÃO ENVIADO POR E-MAIL */
+          <React.Fragment>
+            <div className="login-header">
+              <div className="login-icon-badge" style={{ background: 'linear-gradient(135deg, #059669, #10b981)' }}>
+                <Icon name="mark_email_read" style={{ fontSize: '34px' }} />
+              </div>
+              <h1 className="login-title">Código de Verificação</h1>
+              <p className="login-subtitle" style={{ fontSize: '13px', marginTop: '6px' }}>
+                Enviamos um código de 6 dígitos para o e-mail cadastrado de <strong>{twoFactorData?.name}</strong>:
+              </p>
+            </div>
+
+            <div className="login-2fa-badge">
+              <Icon name="email" style={{ fontSize: '20px', color: '#2563eb' }} />
+              <div>
+                <strong style={{ display: 'block', fontSize: '14px', color: '#1e3a8a' }}>{twoFactorData?.emailMasked}</strong>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>Válido por 15 minutos (Uso único)</span>
+              </div>
+            </div>
+
+            {errorMsg && (
+              <div style={{ background: '#fee2e2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Icon name="error" style={{ fontSize: '18px' }} />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleVerifyCode}>
+              <label className="label" style={{ textAlign: 'center', display: 'block', marginBottom: '8px', fontWeight: 600 }}>
+                Digite o Código de 6 Dígitos
+              </label>
+
+              <div style={{ marginBottom: '20px' }}>
+                <input
+                  className="login-otp-input"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  placeholder="000000"
+                  value={verificationCode}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                    setVerificationCode(val);
+                  }}
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={loading || verificationCode.trim().length !== 6}
+                style={{ padding: '14px', fontSize: '15px', width: '100%', marginBottom: '12px' }}
+              >
+                {loading ? (
+                  <React.Fragment>
+                    <Icon name="sync" style={{ animation: 'spin 1s linear infinite' }} /> Verificando Código...
+                  </React.Fragment>
+                ) : (
+                  <React.Fragment>
+                    <Icon name="verified_user" /> Confirmar & Acessar Sistema
+                  </React.Fragment>
+                )}
+              </button>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={handleResendCode}
+                  disabled={resendCooldown > 0 || resending}
+                  className="btn btn-secondary"
+                  style={{ fontSize: '12px', padding: '8px 12px', flex: 1 }}
+                >
+                  <Icon name="refresh" />
+                  {resendCooldown > 0 ? `Reenviar (${resendCooldown}s)` : (resending ? 'Enviando...' : 'Reenviar Código')}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleBackToCredentials}
+                  className="btn btn-secondary"
+                  style={{ fontSize: '12px', padding: '8px 12px', flex: 1 }}
+                >
+                  <Icon name="arrow_back" /> Trocar Usuário
+                </button>
+              </div>
+            </form>
+          </React.Fragment>
+        )}
       </div>
     </div>
   );

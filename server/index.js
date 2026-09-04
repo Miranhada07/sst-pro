@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { initDatabase, dbRun, dbGet, dbAll } from './database.js';
 import { startGitAutoSync, syncWithGithub } from './git-sync.js';
+import { sendVerificationCodeEmail } from './email-service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,7 +68,17 @@ async function logAudit({ userId, username, action, description, details, ip, la
 // 1. ROTAS DE AUTENTICAÇÃO E PERFIL DO TÉCNICO
 // =========================================================================
 
-// Login com verificação de credenciais e registro de acesso com geolocalização
+// Helper para mascarar e-mail com segurança
+function maskEmail(email) {
+  if (!email || !email.includes('@')) return 'e-mail cadastrado';
+  const [user, domain] = email.split('@');
+  if (user.length <= 2) return `${user[0]}*@${domain}`;
+  const visiblePrefix = user.slice(0, 2);
+  const asterisks = '*'.repeat(Math.max(user.length - 2, 3));
+  return `${visiblePrefix}${asterisks}@${domain}`;
+}
+
+// Login com verificação de credenciais, 2FA/código por e-mail e geolocalização
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password, latitude, longitude, locationText } = req.body;
@@ -93,7 +104,54 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Credenciais inválidas. Verifique se digitou o usuário e a senha respeitando letras maiúsculas e minúsculas exatamente.' });
     }
 
-    // Registrar sucesso de login no log de auditoria com geolocalização e data/hora
+    // Se o usuário ainda não foi verificado (novo funcionário / primeiro acesso / 2FA pendente)
+    if (user.is_verified === 0 || user.is_verified === false) {
+      // Gerar código de 6 dígitos numéricos
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const codeId = uid('otp');
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      const targetEmail = (user.email && user.email.trim()) ? user.email.trim() : 'contato@sstpro.com.br';
+
+      // Invalidar códigos anteriores pendentes
+      await dbRun('UPDATE verification_codes SET used = 1 WHERE user_id = ? AND used = 0', [user.id]);
+
+      // Inserir novo código na tabela
+      await dbRun(`
+        INSERT INTO verification_codes (id, user_id, email, code, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+      `, [codeId, user.id, targetEmail, code, expiresAt]);
+
+      // Enviar e-mail de verificação
+      await sendVerificationCodeEmail({
+        to: targetEmail,
+        name: user.name,
+        code: code,
+        expiresMinutes: 15
+      });
+
+      // Registrar envio do código de verificação no log de auditoria
+      await logAudit({
+        userId: user.id,
+        username: user.username,
+        action: '2FA_CODE_SENT',
+        description: `Código de verificação enviado para o e-mail de '${user.name}' (${targetEmail}).`,
+        ip: getClientIp(req),
+        lat: latitude,
+        lng: longitude,
+        locationText: locationText || 'Terminal de Acesso'
+      });
+
+      return res.json({
+        require2FA: true,
+        userId: user.id,
+        username: user.username,
+        name: user.name,
+        emailMasked: maskEmail(targetEmail),
+        message: `Código de verificação de 6 dígitos enviado para ${maskEmail(targetEmail)}`
+      });
+    }
+
+    // Usuário já verificado: Registrar sucesso de login no log de auditoria
     await logAudit({
       userId: user.id,
       username: user.username,
@@ -123,6 +181,152 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (err) {
     console.error('[Auth/Login] Erro:', err);
     res.status(500).json({ error: 'Erro interno ao processar login: ' + err.message });
+  }
+});
+
+// Validação do Código de Verificação (2FA / Primeiro Acesso)
+app.post('/api/auth/verify-code', async (req, res) => {
+  try {
+    const { userId, code, latitude, longitude, locationText } = req.body;
+
+    if (!userId || !code) {
+      return res.status(400).json({ error: 'Identificação do usuário e código de verificação são obrigatórios.' });
+    }
+
+    const user = await dbGet('SELECT * FROM users WHERE id = ?', [userId]);
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado no sistema.' });
+    }
+
+    const cleanCode = String(code).trim();
+    const activeOtp = await dbGet(`
+      SELECT * FROM verification_codes 
+      WHERE user_id = ? AND used = 0 
+      ORDER BY created_at DESC LIMIT 1
+    `, [userId]);
+
+    if (!activeOtp) {
+      return res.status(400).json({ error: 'Nenhum código ativo encontrado. Solicite um novo código.' });
+    }
+
+    // Verificar se expirou
+    if (new Date(activeOtp.expires_at).getTime() < Date.now()) {
+      return res.status(400).json({ error: 'O código de verificação expirou (validade de 15 minutos). Clique em "Reenviar Código".' });
+    }
+
+    // Verificar limite de 5 tentativas
+    if (activeOtp.attempts >= 5) {
+      return res.status(400).json({ error: 'Limite de 5 tentativas excedido para este código. Clique em "Reenviar Código" para gerar um novo.' });
+    }
+
+    // Verificar se o código está correto
+    if (activeOtp.code !== cleanCode) {
+      const newAttempts = activeOtp.attempts + 1;
+      await dbRun('UPDATE verification_codes SET attempts = ? WHERE id = ?', [newAttempts, activeOtp.id]);
+      const remaining = 5 - newAttempts;
+      return res.status(400).json({ 
+        error: `Código incorreto. Você ainda possui ${Math.max(remaining, 0)} tentativa(s).` 
+      });
+    }
+
+    // Código correto: Marcar como utilizado e ativar o usuário
+    await dbRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [activeOtp.id]);
+    await dbRun("UPDATE users SET is_verified = 1, email_verified_at = datetime('now', 'localtime') WHERE id = ?", [userId]);
+
+    // Registrar sucesso da verificação na auditoria
+    await logAudit({
+      userId: user.id,
+      username: user.username,
+      action: 'LOGIN_SUCCESS_2FA',
+      description: `Verificação de segurança por e-mail concluída com sucesso para '${user.name}'.`,
+      details: { role: user.role, email: user.email },
+      ip: getClientIp(req),
+      lat: latitude,
+      lng: longitude,
+      locationText: locationText || 'Terminal Verificado'
+    });
+
+    // Buscar sessão salva
+    const savedSession = await dbGet('SELECT * FROM user_sessions WHERE user_id = ?', [user.id]);
+    const { password: _, ...userSafe } = user;
+    userSafe.is_verified = 1;
+
+    res.json({
+      success: true,
+      message: 'Código validado com sucesso! Acesso autorizado.',
+      user: userSafe,
+      savedSession: savedSession ? {
+        currentTab: savedSession.current_tab,
+        currentCompanyId: savedSession.current_company_id,
+        draftState: savedSession.draft_state_json ? JSON.parse(savedSession.draft_state_json) : null,
+        lastActiveAt: savedSession.last_active_at
+      } : null
+    });
+  } catch (err) {
+    console.error('[Auth/VerifyCode] Erro:', err);
+    res.status(500).json({ error: 'Erro ao verificar código: ' + err.message });
+  }
+});
+
+// Reenvio de Código de Verificação com Cooldown de 30 segundos
+app.post('/api/auth/resend-code', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'ID de usuário não informado.' });
+
+    const user = await dbGet('SELECT * FROM users WHERE id = ?', [userId]);
+    if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+    // Verificar se houve solicitação recente (menos de 30s)
+    const lastOtp = await dbGet(`
+      SELECT * FROM verification_codes 
+      WHERE user_id = ? 
+      ORDER BY created_at DESC LIMIT 1
+    `, [userId]);
+
+    if (lastOtp) {
+      const timeDiff = Date.now() - new Date(lastOtp.created_at).getTime();
+      if (timeDiff < 30 * 1000) {
+        const secondsLeft = Math.ceil((30 * 1000 - timeDiff) / 1000);
+        return res.status(429).json({ error: `Aguarde mais ${secondsLeft}s antes de solicitar um novo código.` });
+      }
+    }
+
+    // Invalidar códigos anteriores pendentes
+    await dbRun('UPDATE verification_codes SET used = 1 WHERE user_id = ? AND used = 0', [userId]);
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const codeId = uid('otp');
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const targetEmail = (user.email && user.email.trim()) ? user.email.trim() : 'contato@sstpro.com.br';
+
+    await dbRun(`
+      INSERT INTO verification_codes (id, user_id, email, code, expires_at)
+      VALUES (?, ?, ?, ?, ?)
+    `, [codeId, user.id, targetEmail, code, expiresAt]);
+
+    await sendVerificationCodeEmail({
+      to: targetEmail,
+      name: user.name,
+      code: code,
+      expiresMinutes: 15
+    });
+
+    await logAudit({
+      userId: user.id,
+      username: user.username,
+      action: '2FA_CODE_RESENT',
+      description: `Novo código de verificação solicitado e enviado para ${targetEmail}.`,
+      ip: getClientIp(req)
+    });
+
+    res.json({
+      success: true,
+      message: `Novo código de verificação enviado para ${maskEmail(targetEmail)}.`,
+      emailMasked: maskEmail(targetEmail)
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao reenviar código: ' + err.message });
   }
 });
 
@@ -945,8 +1149,8 @@ app.post('/api/users', async (req, res) => {
     const modulesStr = Array.isArray(allowedModules) ? allowedModules.join(',') : (allowedModules || 'riscos');
 
     await dbRun(`
-      INSERT INTO users (id, username, password, name, role, allowed_modules, registration_number, email, phone)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, username, password, name, role, allowed_modules, registration_number, email, phone, is_verified)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `, [
       userId,
       cleanUsername,
@@ -958,6 +1162,24 @@ app.post('/api/users', async (req, res) => {
       email ? email.trim() : null,
       phone ? phone.trim() : null
     ]);
+
+    // Se informado e-mail, gerar código de verificação para o primeiro acesso do colaborador
+    if (email && email.trim()) {
+      const initialCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const codeId = uid('otp');
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      await dbRun(`
+        INSERT INTO verification_codes (id, user_id, email, code, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+      `, [codeId, userId, email.trim(), initialCode, expiresAt]);
+
+      sendVerificationCodeEmail({
+        to: email.trim(),
+        name: name.trim(),
+        code: initialCode,
+        expiresMinutes: 15
+      }).catch((e) => console.error('[UserCreation] Erro ao enviar e-mail inicial:', e.message));
+    }
 
     await logAudit({
       userId: createdBy,
