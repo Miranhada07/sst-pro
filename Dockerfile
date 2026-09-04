@@ -1,8 +1,8 @@
 # Dockerfile para SST PRO - Execução 24/7/365
 FROM node:20-alpine
 
-# Instalar dependências nativas para compilação do SQLite3
-RUN apk add --no-cache python3 make g++ sqlite
+# Instalar dependências nativas para compilação do SQLite3 e Git
+RUN apk add --no-cache python3 make g++ sqlite git
 
 WORKDIR /app
 
@@ -17,9 +17,10 @@ COPY public/ ./public/
 # Criar pasta persistente para o banco SQLite
 RUN mkdir -p /app/data && chown -R node:node /app
 
-# Definir variáveis de ambiente
+# Definir variáveis de ambiente padrão
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV GITHUB_REPO=Miranhada07/sst-pro
 
 # Porta exposta
 EXPOSE 3000
