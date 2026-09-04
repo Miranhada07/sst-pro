@@ -46,18 +46,78 @@ function getRepoUrl() {
   return 'origin';
 }
 
-// Configurar identidade do autor no Git de forma resiliente
-export function ensureGitConfig() {
+// Execução assíncrona isolada de comandos Git com flags de autor e ambiente não-interativo
+function execGit(cmd, timeoutMs = 45000) {
   return new Promise((resolve) => {
-    const cmd = `git config user.name "${GIT_AUTHOR_NAME}" && git config user.email "${GIT_AUTHOR_EMAIL}"`;
-    exec(cmd, { cwd: REPO_ROOT }, () => {
-      resolve();
+    const gitAuthorFlags = `-c user.name="${GIT_AUTHOR_NAME}" -c user.email="${GIT_AUTHOR_EMAIL}"`;
+    const fullCmd = `git ${gitAuthorFlags} ${cmd}`;
+
+    exec(fullCmd, {
+      cwd: REPO_ROOT,
+      timeout: timeoutMs,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_MERGE_AUTOEDIT: 'no',
+        GIT_EDITOR: 'true',
+        GIT_AUTHOR_NAME,
+        GIT_AUTHOR_EMAIL,
+        GIT_COMMITTER_NAME: GIT_AUTHOR_NAME,
+        GIT_COMMITTER_EMAIL: GIT_AUTHOR_EMAIL
+      }
+    }, (error, stdout, stderr) => {
+      resolve({
+        success: !error,
+        error: error ? error.message : null,
+        stdout: (stdout || '').trim(),
+        stderr: (stderr || '').trim(),
+        combined: `${stdout || ''}\n${stderr || ''}`.trim()
+      });
     });
   });
 }
 
+// Limpeza de bloqueios ou estados pendentes de merge/rebase
+async function cleanGitState() {
+  try {
+    const gitDir = path.join(REPO_ROOT, '.git');
+    if (fs.existsSync(gitDir)) {
+      const lockFile = path.join(gitDir, 'index.lock');
+      if (fs.existsSync(lockFile)) {
+        try { fs.unlinkSync(lockFile); } catch (e) {}
+      }
+      const rebaseMerge = path.join(gitDir, 'rebase-merge');
+      if (fs.existsSync(rebaseMerge)) {
+        try { fs.rmSync(rebaseMerge, { recursive: true, force: true }); } catch (e) {}
+      }
+      const rebaseApply = path.join(gitDir, 'rebase-apply');
+      if (fs.existsSync(rebaseApply)) {
+        try { fs.rmSync(rebaseApply, { recursive: true, force: true }); } catch (e) {}
+      }
+      const mergeHead = path.join(gitDir, 'MERGE_HEAD');
+      if (fs.existsSync(mergeHead)) {
+        try { fs.unlinkSync(mergeHead); } catch (e) {}
+      }
+    }
+  } catch (e) {}
+}
+
+// Configurar identidade do autor no Git de forma resiliente
+export async function ensureGitConfig() {
+  await cleanGitState();
+  await execGit(`config user.name "${GIT_AUTHOR_NAME}"`);
+  await execGit(`config user.email "${GIT_AUTHOR_EMAIL}"`);
+}
+
 let isSyncing = false;
 
+/**
+ * Realiza a sincronização bidirecional completa com o repositório GitHub:
+ * 1. Limpa travas e estados pendentes
+ * 2. Adiciona e comita alterações locais
+ * 3. Busca e integra alterações remotas (merge com preferência local -X ours)
+ * 4. Faz push seguro para a branch main
+ */
 export async function syncWithGithub(reason = 'Alterações automáticas e auditoria') {
   if (isSyncing) {
     return { success: false, message: 'Sincronização já em andamento. Aguarde alguns instantes.' };
@@ -66,55 +126,72 @@ export async function syncWithGithub(reason = 'Alterações automáticas e audit
   isSyncing = true;
   await ensureGitConfig();
 
-  return new Promise((resolve) => {
+  try {
     const timestamp = new Date().toLocaleString('pt-BR');
     const sanitizedReason = reason.replace(/["`$\\]/g, '').slice(0, 100);
     const commitMsg = `auto-sync: ${sanitizedReason} [${timestamp}]`;
     const targetRepo = getRepoUrl();
 
-    // 1. Configurar autor inline via -c para garantir que nenhum ambiente falhe (Render, Docker, Local)
-    // 2. Adicionar arquivos modificados
-    // 3. Criar commit apenas se houver alterações no index/working tree
-    const gitAuthorFlags = `-c user.name="${GIT_AUTHOR_NAME}" -c user.email="${GIT_AUTHOR_EMAIL}"`;
-    const cmd = `git ${gitAuthorFlags} config user.name "${GIT_AUTHOR_NAME}" && git ${gitAuthorFlags} config user.email "${GIT_AUTHOR_EMAIL}" && git add -A && (git diff-index --quiet HEAD || git ${gitAuthorFlags} commit -m "${commitMsg}") && git push ${targetRepo} HEAD:main`;
+    // 1. Adicionar todos os arquivos modificados
+    await execGit('add -A');
 
-    exec(cmd, { cwd: REPO_ROOT, timeout: 45000 }, (error, stdout, stderr) => {
-      isSyncing = false;
-      const combinedOutput = `${stdout || ''}\n${stderr || ''}`;
+    // 2. Verificar se há modificações para commit local
+    const diffCheck = await execGit('diff-index --quiet HEAD');
+    let committed = false;
+    if (!diffCheck.success) {
+      const commitRes = await execGit(`commit -m "${commitMsg}"`);
+      committed = commitRes.success;
+    }
 
-      if (error) {
-        // Tratar casos comuns que não são erros reais
-        if (
-          combinedOutput.includes('nothing to commit') ||
-          combinedOutput.includes('Everything up-to-date') ||
-          combinedOutput.includes('Everything up to date') ||
-          combinedOutput.includes('sem nada para submeter')
-        ) {
-          console.log('[GitSync] ✅ Repositório sincronizado e já atualizado.');
-          return resolve({
-            success: true,
-            message: 'Repositório GitHub já está 100% atualizado com todas as alterações recentes.',
-            output: combinedOutput.trim()
-          });
-        }
+    // 3. Buscar estado mais recente do repositório remoto para evitar rejeição "fetch first"
+    const fetchRes = await execGit(`fetch ${targetRepo} main`);
+    
+    // 4. Integrar alterações remotas de forma automática e não-destrutiva
+    if (fetchRes.success) {
+      await execGit('merge FETCH_HEAD --no-edit -X ours -m "auto-sync: integração automática de alterações remotas"');
+    }
 
-        console.warn('[GitSync] Aviso na sincronização com GitHub:', error.message);
-        return resolve({
-          success: false,
-          error: error.message,
-          output: combinedOutput.trim()
-        });
-      }
+    // 5. Enviar alterações para a branch main do GitHub
+    let pushRes = await execGit(`push ${targetRepo} HEAD:main`);
 
+    // Se o push foi rejeitado por corrida concorrente, tentar uma reconciliação rápida e reenviar
+    if (!pushRes.success && (pushRes.combined.includes('fetch first') || pushRes.combined.includes('non-fast-forward'))) {
+      console.log('[GitSync] 🔄 Reconciliando commits remotos concorrentes antes do push...');
+      await execGit(`fetch ${targetRepo} main`);
+      await execGit('merge FETCH_HEAD --no-edit -X ours');
+      pushRes = await execGit(`push ${targetRepo} HEAD:main`);
+    }
+
+    isSyncing = false;
+
+    // Tratar respostas de sucesso (mesmo quando já está atualizado)
+    if (
+      pushRes.success ||
+      pushRes.combined.includes('Everything up-to-date') ||
+      pushRes.combined.includes('Everything up to date') ||
+      pushRes.combined.includes('nothing to commit')
+    ) {
       console.log(`[GitSync] 🚀 Sincronização com GitHub concluída com sucesso: ${commitMsg}`);
-      resolve({
+      return {
         success: true,
-        message: 'Commit e Push realizados com sucesso no GitHub!',
+        message: 'Banco de dados e alterações sincronizados com o GitHub com sucesso!',
         commit: commitMsg,
-        output: stdout ? stdout.trim() : 'Sucesso'
-      });
-    });
-  });
+        output: pushRes.stdout || pushRes.combined || 'Sucesso'
+      };
+    }
+
+    // Se houve erro real
+    console.warn('[GitSync] Aviso na sincronização com GitHub:', pushRes.error || pushRes.combined);
+    return {
+      success: false,
+      error: pushRes.error || pushRes.combined,
+      output: pushRes.combined
+    };
+  } catch (err) {
+    isSyncing = false;
+    console.error('[GitSync] Erro inesperado na sincronização:', err.message);
+    return { success: false, error: err.message };
+  }
 }
 
 // Iniciar agendamento automático de backup e push no GitHub a cada 15 minutos
