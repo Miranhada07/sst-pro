@@ -11,6 +11,11 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+export const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
 const DB_PATH = path.join(DATA_DIR, 'sst_pro.sqlite');
 console.log(`[Database] Inicializando banco de dados local SQLite em: ${DB_PATH}`);
 
@@ -50,6 +55,20 @@ export const dbAll = (sql, params = []) => {
   });
 };
 
+/**
+ * Força o descarregamento imediato do arquivo WAL (-wal) diretamente no arquivo mestre sst_pro.sqlite.
+ * Garante que alterações persistam no arquivo de disco em tempo real para cópias e commits Git.
+ */
+export async function checkpointDatabase() {
+  try {
+    const res = await dbRun('PRAGMA wal_checkpoint(TRUNCATE)');
+    return res;
+  } catch (err) {
+    console.warn('[Database] Aviso ao executar checkpoint WAL:', err.message);
+    return null;
+  }
+}
+
 // Backup de segurança automático do banco SQLite
 export async function backupDatabase() {
   try {
@@ -59,6 +78,9 @@ export async function backupDatabase() {
     }
 
     if (!fs.existsSync(DB_PATH)) return;
+
+    // Descarregar WAL no arquivo SQLite antes de copiar
+    await checkpointDatabase();
 
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
