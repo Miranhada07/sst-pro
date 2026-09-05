@@ -1,5 +1,12 @@
 import nodemailer from 'nodemailer';
 
+// Carregar variáveis de ambiente do .env caso ainda não tenham sido carregadas
+try {
+  process.loadEnvFile();
+} catch (_) {
+  // .env opcional se variáveis forem injetadas diretamente pelo container/SO
+}
+
 // Criação do transportador SMTP dinâmico
 function getEmailTransporter() {
   const host = process.env.SMTP_HOST;
