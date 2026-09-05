@@ -2,6 +2,7 @@ import { exec } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { checkpointDatabase } from './database.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -127,6 +128,9 @@ export async function syncWithGithub(reason = 'Alterações automáticas e audit
   await ensureGitConfig();
 
   try {
+    // Descarregar WAL no SQLite antes de adicionar ao Git para garantir integridade física dos dados
+    await checkpointDatabase();
+
     const timestamp = new Date().toLocaleString('pt-BR');
     const sanitizedReason = reason.replace(/["`$\\]/g, '').slice(0, 100);
     const commitMsg = `auto-sync: ${sanitizedReason} [${timestamp}]`;
@@ -192,6 +196,25 @@ export async function syncWithGithub(reason = 'Alterações automáticas e audit
     console.error('[GitSync] Erro inesperado na sincronização:', err.message);
     return { success: false, error: err.message };
   }
+}
+
+let syncDebounceTimer = null;
+
+/**
+ * Agenda sincronização automática com o GitHub em background com debounce.
+ * Evita sobrecarga de commits quando o usuário realiza múltiplas ações seguidas no site.
+ * @param {string} reason - Motivo descritivo da alteração
+ * @param {number} delayMs - Tempo de espera em milissegundos (padrão: 5000ms)
+ */
+export function scheduleGitSync(reason = 'Alterações realizadas via site', delayMs = 5000) {
+  if (syncDebounceTimer) {
+    clearTimeout(syncDebounceTimer);
+  }
+  syncDebounceTimer = setTimeout(() => {
+    syncWithGithub(reason).catch(err => {
+      console.warn('[GitSync] ⚠️ Aviso na sincronização agendada:', err.message);
+    });
+  }, delayMs);
 }
 
 // Iniciar agendamento automático de backup e push no GitHub a cada 15 minutos

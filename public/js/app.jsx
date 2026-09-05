@@ -176,16 +176,18 @@ function App() {
   }, [currentUser]);
 
   // Carregar todos os dados do banco SQLite para o usuário autenticado
-  async function loadAllData() {
+  async function loadAllData(silent = false) {
+    const userToLoad = currentUserRef.current || currentUser;
+    if (!userToLoad) return;
     try {
       // 1. Status de Pagamento / Assinatura PRO do Usuário
-      const resPay = await fetch(`/api/payment/status?userId=${currentUser.id}`);
+      const resPay = await fetch(`/api/payment/status?userId=${userToLoad.id}`);
       const dataPay = await resPay.json();
       setIsPremium(dataPay.isPremium);
       setSubscriptionInfo(dataPay.subscription);
 
       // 2. Empresas do Usuário Autenticado
-      const resComp = await fetch(`/api/companies?userId=${currentUser.id}`);
+      const resComp = await fetch(`/api/companies?userId=${userToLoad.id}`);
       const dataComp = await resComp.json();
       setEmpresas(dataComp.companies || []);
 
@@ -204,19 +206,89 @@ function App() {
       setSolicitacoes(dataReq.requests || []);
 
       // 5. Riscos do Usuário
-      const resRisk = await fetch(`/api/risks?userId=${currentUser.id}`);
+      const resRisk = await fetch(`/api/risks?userId=${userToLoad.id}`);
       const dataRisk = await resRisk.json();
       setAnalisesRiscos(dataRisk.analyses || []);
 
       // 6. Auditoria do Usuário em Tempo Real
-      const resAudit = await fetch(`/api/audit?userId=${currentUser.id}`);
+      const resAudit = await fetch(`/api/audit?userId=${userToLoad.id}`);
       const dataAudit = await resAudit.json();
       setAuditLogs(dataAudit.logs || []);
     } catch (err) {
-      console.error('Erro ao carregar dados do servidor:', err);
-      showToast('Erro ao sincronizar com o banco SQLite local.', 'error');
+      if (!silent) {
+        console.error('Erro ao carregar dados do servidor:', err);
+        showToast('Erro ao sincronizar com o banco SQLite local.', 'error');
+      }
     }
   }
+
+  // Manter referência atualizada do usuário para eventos assíncronos de tempo real
+  const currentUserRef = useRef(currentUser);
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
+  // Estado e conexão contínua Server-Sent Events (SSE) para dados e live-reload
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+
+  useEffect(() => {
+    let evtSource = null;
+    let reconnectTimer = null;
+
+    function startSSE() {
+      try {
+        evtSource = new EventSource('/api/realtime/stream');
+
+        evtSource.onopen = () => {
+          setRealtimeConnected(true);
+        };
+
+        evtSource.onmessage = (e) => {
+          if (!e.data) return;
+          try {
+            const payload = JSON.parse(e.data);
+            if (payload.type === 'CONNECTED') {
+              setRealtimeConnected(true);
+            } else if (payload.type === 'DATA_CHANGED') {
+              // Sincronização em tempo real de dados nas telas abertas
+              if (currentUserRef.current) {
+                loadAllData(true);
+              }
+            } else if (payload.type === 'RELOAD_CODE') {
+              // Notificação e recarga automática quando arquivos estáticos forem alterados
+              showToast(`Arquivo '${payload.file}' atualizado. Sincronizando tela em tempo real...`, 'info');
+              setTimeout(() => {
+                window.location.reload();
+              }, 400);
+            }
+          } catch (_) {}
+        };
+
+        evtSource.onerror = () => {
+          setRealtimeConnected(false);
+          if (evtSource) {
+            evtSource.close();
+            evtSource = null;
+          }
+          if (!reconnectTimer) {
+            reconnectTimer = setTimeout(() => {
+              reconnectTimer = null;
+              startSSE();
+            }, 3000);
+          }
+        };
+      } catch (e) {
+        setRealtimeConnected(false);
+      }
+    }
+
+    startSSE();
+
+    return () => {
+      if (evtSource) evtSource.close();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+    };
+  }, []);
 
   // 4. Salvar estado de navegação automaticamente (onde parou)
   useEffect(() => {
@@ -361,6 +433,12 @@ function App() {
             <a href="https://sst-pro.onrender.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600, textDecoration: 'none' }}>
               sst-pro.onrender.com
             </a>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '3px' }}>
+              <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: realtimeConnected ? '#22c55e' : '#f97316', display: 'inline-block', boxShadow: realtimeConnected ? '0 0 6px #22c55e' : 'none' }}></span>
+              <span style={{ fontSize: '10px', color: realtimeConnected ? '#15803d' : '#c2410c', fontWeight: 700 }}>
+                {realtimeConnected ? 'Tempo Real Ativo' : 'Reconectando...'}
+              </span>
+            </div>
           </div>
           {mobileMenuOpen && (
             <button
@@ -469,9 +547,32 @@ function App() {
           </div>
 
           <div className="topbar-right">
-            <div className="badge badge-pro" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Icon name="verified_user" style={{ fontSize: '15px', color: '#10b981' }} />
-              <span>SISTEMA ATIVO & CONECTADO</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: realtimeConnected ? '#f0fdf4' : '#fff7ed',
+                border: `1px solid ${realtimeConnected ? '#86efac' : '#fdba74'}`,
+                borderRadius: '16px',
+                padding: '4px 10px',
+                fontSize: '11px',
+                fontWeight: 700,
+                color: realtimeConnected ? '#15803d' : '#c2410c'
+              }}>
+                <span style={{
+                  width: '7px',
+                  height: '7px',
+                  borderRadius: '50%',
+                  background: realtimeConnected ? '#16a34a' : '#ea580c',
+                  boxShadow: realtimeConnected ? '0 0 6px #16a34a' : 'none'
+                }}></span>
+                <span className="hide-mobile">{realtimeConnected ? 'Tempo Real Ativo' : 'Reconectando...'}</span>
+              </div>
+              <div className="badge badge-pro" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Icon name="verified_user" style={{ fontSize: '15px', color: '#10b981' }} />
+                <span className="hide-mobile">SST PRO ONLINE</span>
+              </div>
             </div>
           </div>
         </div>

@@ -1,9 +1,10 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { initDatabase, dbRun, dbGet, dbAll } from './database.js';
-import { startGitAutoSync, syncWithGithub } from './git-sync.js';
+import { initDatabase, dbRun, dbGet, dbAll, UPLOADS_DIR, checkpointDatabase } from './database.js';
+import { startGitAutoSync, syncWithGithub, scheduleGitSync } from './git-sync.js';
 import { sendVerificationCodeEmail } from './email-service.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,11 +22,120 @@ const PORT = process.env.PORT || 3000;
 
 // Configuração de middlewares
 app.use(cors());
-app.use(express.json({ limit: '50mb' })); // Suporte a fotos em Base64
+app.use(express.json({ limit: '50mb' })); // Suporte a fotos e evidências em Base64
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Servir arquivos estáticos do frontend
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// Servir arquivos de uploads/evidências diretamente do disco
+app.use('/uploads', express.static(UPLOADS_DIR));
+
+// Servir arquivos estáticos do frontend com desativação de cache em arquivos dinâmicos (Live Update)
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.jsx') || filePath.endsWith('.js') || filePath.endsWith('.css') || filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
+
+// =========================================================================
+// HUB EM TEMPO REAL: SERVER-SENT EVENTS (SSE) & FILE WATCHER
+// =========================================================================
+const realtimeClients = new Set();
+
+/**
+ * Transmite eventos em tempo real para todas as conexões ativas
+ * @param {Object} event - Dados do evento ({ type, entity, action, data })
+ */
+export function broadcastRealtime(event) {
+  const payload = `data: ${JSON.stringify({ ...event, timestamp: new Date().toISOString() })}\n\n`;
+  for (const client of realtimeClients) {
+    try {
+      client.res.write(payload);
+    } catch (_) {
+      realtimeClients.delete(client);
+    }
+  }
+}
+
+// Endpoint do Stream de Eventos em Tempo Real (SSE)
+app.get('/api/realtime/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const client = { id: Math.random().toString(36).slice(2), res };
+  realtimeClients.add(client);
+
+  // Handshake inicial
+  res.write(`data: ${JSON.stringify({ type: 'CONNECTED', message: 'Canal SSE em tempo real ativo' })}\n\n`);
+
+  // Heartbeat keep-alive a cada 25 segundos
+  const keepAlive = setInterval(() => {
+    try {
+      res.write(': keepalive\n\n');
+    } catch (_) {}
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    realtimeClients.delete(client);
+  });
+});
+
+// Watcher em tempo real dos arquivos do site na pasta public/
+try {
+  const publicDir = path.join(__dirname, '..', 'public');
+  let reloadTimer = null;
+  fs.watch(publicDir, { recursive: true }, (eventType, filename) => {
+    if (filename && (filename.endsWith('.jsx') || filename.endsWith('.js') || filename.endsWith('.css') || filename.endsWith('.html'))) {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => {
+        console.log(`[Realtime] 🔄 Arquivo alterado no site: ${filename}. Enviando sinal de recarga aos navegadores...`);
+        broadcastRealtime({ type: 'RELOAD_CODE', file: filename });
+      }, 350);
+    }
+  });
+} catch (e) {
+  console.warn('[Realtime] Aviso ao ativar watcher de arquivos públicos:', e.message);
+}
+
+// Endpoint para upload físico de evidências/fotos com persistência em disco
+app.post('/api/uploads', (req, res) => {
+  try {
+    const { base64Data, prefix = 'evidencia' } = req.body;
+    if (!base64Data) return res.status(400).json({ error: 'Nenhum dado enviado para upload.' });
+
+    const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+    let buffer;
+    let ext = 'jpg';
+    if (matches && matches.length === 3) {
+      const mime = matches[1];
+      ext = mime.split('/')[1] || 'jpg';
+      buffer = Buffer.from(matches[2], 'base64');
+    } else {
+      buffer = Buffer.from(base64Data, 'base64');
+    }
+
+    const filename = `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
+    const targetFile = path.join(UPLOADS_DIR, filename);
+
+    fs.writeFileSync(targetFile, buffer);
+    console.log(`[Uploads] 📸 Arquivo salvo em disco: ${filename} (${buffer.length} bytes)`);
+
+    res.json({
+      success: true,
+      url: `/uploads/${filename}`,
+      filename,
+      size: buffer.length
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Health Check para monitoramento 24/7/365 e Keep-Alive
 app.get(['/api/health', '/healthz'], (req, res) => {
@@ -66,6 +176,14 @@ async function logAudit({ userId, username, action, description, details, ip, la
       lng || null,
       locationText || 'Localização não informada'
     ]);
+
+    // Transmitir novo registro de auditoria em tempo real para a aba de Auditoria
+    broadcastRealtime({
+      type: 'DATA_CHANGED',
+      entity: 'audit',
+      action,
+      data: { id: logId, userId, username, action, description, timestamp: new Date().toISOString() }
+    });
   } catch (err) {
     console.error('[AuditLog] Erro ao gravar log:', err.message);
   }
@@ -591,7 +709,57 @@ app.post('/api/companies', async (req, res) => {
     });
 
     const newCompany = await dbGet('SELECT * FROM companies WHERE id = ?', [companyId]);
+
+    // Atualização em tempo real e agendamento de sincronização
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'companies', action: 'CREATE', data: newCompany });
+    scheduleGitSync(`Nova empresa cadastrada: ${name.trim()}`);
+
     res.status(201).json({ company: newCompany });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Atualizar dados de uma empresa existente
+app.put('/api/companies/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, cnpj, porte, valorMensalidade, endereco, responsavel, emailContato, telefoneContato, userId, username } = req.body;
+
+    const existing = await dbGet('SELECT * FROM companies WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+    const valor = valorMensalidade !== undefined ? valorMensalidade : existing.valor_mensalidade;
+
+    await dbRun(`
+      UPDATE companies
+      SET name = ?, cnpj = ?, porte = ?, valor_mensalidade = ?, endereco = ?, responsavel = ?, email_contato = ?, telefone_contato = ?
+      WHERE id = ?
+    `, [
+      name ? name.trim() : existing.name,
+      cnpj !== undefined ? cnpj.trim() : existing.cnpj,
+      porte || existing.porte,
+      valor,
+      endereco !== undefined ? endereco.trim() : existing.endereco,
+      responsavel !== undefined ? responsavel.trim() : existing.responsavel,
+      emailContato !== undefined ? emailContato.trim() : existing.email_contato,
+      telefoneContato !== undefined ? telefoneContato.trim() : existing.telefone_contato,
+      id
+    ]);
+
+    await logAudit({
+      userId,
+      username,
+      action: 'COMPANY_UPDATED',
+      description: `Dados da empresa '${name || existing.name}' atualizados com sucesso.`,
+      ip: getClientIp(req)
+    });
+
+    const updated = await dbGet('SELECT * FROM companies WHERE id = ?', [id]);
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'companies', action: 'UPDATE', data: updated });
+    scheduleGitSync(`Empresa atualizada: ${updated.name}`);
+
+    res.json({ success: true, company: updated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -613,6 +781,9 @@ app.delete('/api/companies/:id', async (req, res) => {
       description: `Empresa '${comp.name}' removida do sistema com todo seu histórico.`,
       ip: getClientIp(req)
     });
+
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'companies', action: 'DELETE', id });
+    scheduleGitSync(`Empresa excluída: ${comp.name}`);
 
     res.json({ success: true, message: 'Empresa removida com sucesso.' });
   } catch (err) {
@@ -671,6 +842,9 @@ app.post('/api/inventory', async (req, res) => {
     });
 
     const newMaterial = await dbGet('SELECT * FROM inventory_materials WHERE id = ?', [materialId]);
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'inventory', action: 'CREATE', data: newMaterial });
+    scheduleGitSync(`EPI cadastrado no estoque: ${identificacao.trim()}`);
+
     res.status(201).json({ material: newMaterial });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -710,6 +884,9 @@ app.put('/api/inventory/:id', async (req, res) => {
     });
 
     const updated = await dbGet('SELECT * FROM inventory_materials WHERE id = ?', [id]);
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'inventory', action: 'UPDATE', data: updated });
+    scheduleGitSync(`EPI atualizado no estoque: ${updated.identificacao}`);
+
     res.json({ material: updated });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -732,6 +909,9 @@ app.delete('/api/inventory/:id', async (req, res) => {
       description: `EPI '${existing.identificacao}' excluído do almoxarifado.`,
       ip: getClientIp(req)
     });
+
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'inventory', action: 'DELETE', id });
+    scheduleGitSync(`EPI removido do estoque: ${existing.identificacao}`);
 
     res.json({ success: true, message: 'Item removido do almoxarifado.' });
   } catch (err) {
@@ -823,6 +1003,9 @@ app.post('/api/requests', async (req, res) => {
       lng: longitude,
       locationText
     });
+
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'requests', action: 'CREATE', count: createdRequests.length });
+    scheduleGitSync(`Solicitação de EPI criada para ${colaborador.trim()}`);
 
     res.status(201).json({
       success: true,
@@ -924,6 +1107,11 @@ app.post('/api/requests/:id/approve', async (req, res) => {
     `, [id]);
     const updatedMaterial = await dbGet('SELECT * FROM inventory_materials WHERE id = ?', [material.id]);
 
+    // Transmissão em tempo real e agendamento de sincronização
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'requests', action: 'APPROVE', data: updatedRequest });
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'inventory', action: 'UPDATE', data: updatedMaterial });
+    scheduleGitSync(`Baixa automática de EPI aprovada para ${request.colaborador}`);
+
     res.json({
       success: true,
       message: `EPI aprovado com sucesso! Baixa automática de ${qtdDeducao} ${material.unidade} realizada no almoxarifado. Novo saldo: ${novoEstoque} ${material.unidade}.`,
@@ -965,6 +1153,9 @@ app.post('/api/requests/:id/reject', async (req, res) => {
     });
 
     const updated = await dbGet('SELECT * FROM epi_requests WHERE id = ?', [id]);
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'requests', action: 'REJECT', data: updated });
+    scheduleGitSync(`Solicitação de EPI rejeitada: ${request.colaborador}`);
+
     res.json({ request: updated });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1047,6 +1238,9 @@ app.post('/api/risks', async (req, res) => {
       locationText
     });
 
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'risks', action: 'CREATE', count: createdAnalyses.length });
+    scheduleGitSync(`Inspeção de riscos registrada no local ${local.trim()}`);
+
     res.status(201).json({
       success: true,
       analysis: createdAnalyses[0],
@@ -1074,6 +1268,9 @@ app.delete('/api/risks/:id', async (req, res) => {
       description: `Relatório de Inspeção de Risco do local '${existing.local}' foi excluído.`,
       ip: getClientIp(req)
     });
+
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'risks', action: 'DELETE', id });
+    scheduleGitSync(`Inspeção de risco removida: ${existing.local}`);
 
     res.json({ success: true, message: 'Inspeção excluída com sucesso.' });
   } catch (err) {
@@ -1199,8 +1396,9 @@ app.post('/api/users', async (req, res) => {
 
     const newUser = await dbGet('SELECT id, username, name, role, allowed_modules, registration_number, email, phone, created_at FROM users WHERE id = ?', [userId]);
 
-    // Disparar sincronização automática com GitHub
-    syncWithGithub(`Novo funcionário cadastrado: @${cleanUsername}`).catch(() => {});
+    // Atualização em tempo real e agendamento de sincronização
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'users', action: 'CREATE', data: newUser });
+    scheduleGitSync(`Novo funcionário cadastrado: @${cleanUsername}`);
 
     res.status(201).json({ success: true, message: 'Funcionário cadastrado com sucesso!', user: newUser });
   } catch (err) {
@@ -1248,7 +1446,8 @@ app.put('/api/users/:id', async (req, res) => {
 
     const updated = await dbGet('SELECT id, username, name, role, allowed_modules, registration_number, email, phone, created_at FROM users WHERE id = ?', [id]);
 
-    syncWithGithub(`Permissões atualizadas para @${user.username}`).catch(() => {});
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'users', action: 'UPDATE', data: updated });
+    scheduleGitSync(`Permissões atualizadas para @${user.username}`);
 
     res.json({ success: true, message: 'Permissões do funcionário atualizadas com sucesso!', user: updated });
   } catch (err) {
@@ -1280,7 +1479,8 @@ app.delete('/api/users/:id', async (req, res) => {
       ip: getClientIp(req)
     });
 
-    syncWithGithub(`Funcionário removido: @${user.username}`).catch(() => {});
+    broadcastRealtime({ type: 'DATA_CHANGED', entity: 'users', action: 'DELETE', id });
+    scheduleGitSync(`Funcionário removido: @${user.username}`);
 
     res.json({ success: true, message: `Funcionário '${user.name}' excluído com sucesso.` });
   } catch (err) {
