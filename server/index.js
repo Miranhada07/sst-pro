@@ -9,6 +9,13 @@ import { sendVerificationCodeEmail } from './email-service.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Carregamento automático do arquivo .env nativo do Node.js
+try {
+  process.loadEnvFile();
+} catch (_) {
+  // .env não encontrado ou já fornecido pelo ambiente
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
